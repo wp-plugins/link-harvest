@@ -3,7 +3,7 @@
 /*
 Plugin Name: Link Harvest
 Plugin URI: http://alexking.org/projects/wordpress
-Description: This will harvest links from your WordPress database, creating a links list sorted by popularity. Once you have activated the plugin, you can configure the <a href="options-general.php?page=link-harvest.php">Settings</a> and see your <a href="index.php?page=link-harvest.php">list of links</a>. Also see <a href="options-general.php?page=link-harvest.php#aklh_template_tags">how to show the list of links</a> in your blog.
+Description: This will harvest links from your WordPress database, creating a links list sorted by popularity. Once you have activated the plugin, you can configure the <a href="options-general.php?page=link-harvest.php">Settings</a> and see your <a href="index.php?page=link-harvest.php">list of links</a>. Also see <a href="options-general.php?page=link-harvest.php#aklh_template_tags">how to show the list of links</a> in your blog. Questions on configuration, etc.? Make sure to read the README.
 Version: 1.0beta
 Author: Alex King
 Author URI: http://alexking.org
