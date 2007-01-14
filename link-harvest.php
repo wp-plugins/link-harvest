@@ -46,6 +46,21 @@ if (!function_exists('is_admin_page')) {
 	}
 }
 
+if (!function_exists('ak_prototype')) {
+	function ak_prototype() {
+		if (!function_exists('wp_enqueue_script')) {
+			global $ak_prototype;
+			if (!isset($ak_prototype) || !$ak_prototype) {
+				print('
+		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/wp-includes/js/prototype.js"></script>
+				');
+			}
+			$$ak_prototype = true;
+		}
+	}
+}
+
+
 $wpdb->ak_domains = $table_prefix.'ak_domains';
 $wpdb->ak_linkharvest = $table_prefix.'ak_linkharvest';
 
@@ -1069,12 +1084,12 @@ function aklh_init() {
 	}
 }
 
+function aklh_head() {
+	ak_prototype();
+}
+
 function aklh_admin_head() {
-	if (!function_exists('wp_enqueue_script')) {
-		print('
-		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/wp-includes/js/prototype.js"></script>
-		');
-	}
+	ak_prototype();
 	print('
 		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=lh_js"></script>
 		<link rel="stylesheet" type="text/css" href="'.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=lh_css" />
@@ -1444,6 +1459,8 @@ function aklh_top_links($count = 10) {
 // -- GET HOOKED
 
 add_action('init', 'aklh_init');
+add_action('wp_head', 'aklh_head');
+
 add_action('admin_menu', 'aklh_options');
 add_action('admin_head', 'aklh_admin_head');
 
