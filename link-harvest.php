@@ -4,12 +4,12 @@
 Plugin Name: Link Harvest
 Plugin URI: http://alexking.org/projects/wordpress
 Description: This will harvest links from your WordPress database, creating a links list sorted by popularity. Once you have activated the plugin, you can configure the <a href="options-general.php?page=link-harvest.php">Settings</a> and see your <a href="index.php?page=link-harvest.php">list of links</a>. Also see <a href="options-general.php?page=link-harvest.php#aklh_template_tags">how to show the list of links</a> in your blog. Questions on configuration, etc.? Make sure to read the README.
-Version: 1.0beta
+Version: 1.0
 Author: Alex King
 Author URI: http://alexking.org
 */ 
 
-// Copyright (c) 2006 Alex King. All rights reserved.
+// Copyright (c) 2006-2007 Alex King. All rights reserved.
 // http://alexking.org/projects/wordpress
 //
 // Released under the GPL license
@@ -55,7 +55,7 @@ if (!function_exists('ak_prototype')) {
 		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/wp-includes/js/prototype.js"></script>
 				');
 			}
-			$$ak_prototype = true;
+			$ak_prototype = true;
 		}
 	}
 }
@@ -430,7 +430,10 @@ class ak_link_harvest {
 			$posts = $wpdb->get_results("
 				SELECT *
 				FROM $wpdb->posts
-				WHERE post_status = 'publish'
+				WHERE (
+					post_status = 'publish'
+					OR post_status = 'static'
+				)
 				AND ID IN (".implode(',', $post_ids).")
 			");
 		}
@@ -444,7 +447,10 @@ class ak_link_harvest {
 			$posts = $wpdb->get_results("
 				SELECT *
 				FROM $wpdb->posts
-				WHERE post_status = 'publish'
+				WHERE (
+					post_status = 'publish'
+					OR post_status = 'static'
+				)
 				AND post_content LIKE '%http://%'
 				ORDER BY ID
 				LIMIT $start, $limit
@@ -718,7 +724,10 @@ class ak_link_harvest {
 				$count = $wpdb->get_var("
 					SELECT count(ID)
 					FROM $wpdb->posts
-					WHERE post_status = 'publish'
+					WHERE (
+						post_status = 'publish'
+						OR post_status = 'static'
+					)
 					AND post_content LIKE '%http://%'
 				");
 				$js = '
@@ -959,7 +968,6 @@ class ak_link_harvest {
 <head>
 	<title>'.__('Link Harvest', 'alexking.org').'</title>
 	<script src="'.get_bloginfo('wpurl').'/wp-includes/js/prototype.js" type="text/javascript"></script>
-	<script src="'.get_bloginfo('wpurl').'/wp-includes/js/wp-ajax-js.php" type="text/javascript"></script>
 	<script type="text/javascript">
 	'.$js.'
 	</script>
@@ -1086,13 +1094,17 @@ function aklh_init() {
 
 function aklh_head() {
 	ak_prototype();
+	print('
+		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_js"></script>
+		<link rel="stylesheet" type="text/css" href="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_css" />
+	');
 }
 
 function aklh_admin_head() {
 	ak_prototype();
 	print('
-		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=lh_js"></script>
-		<link rel="stylesheet" type="text/css" href="'.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=lh_css" />
+		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_js"></script>
+		<link rel="stylesheet" type="text/css" href="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_css" />
 	');
 }
 
@@ -1145,7 +1157,10 @@ function aklh_request_handler() {
 				$count = $wpdb->get_var("
 					SELECT count(ID)
 					FROM $wpdb->posts
-					WHERE post_status = 'publish'
+					WHERE (
+						post_status = 'publish'
+						OR post_status = 'static'
+					)
 					AND (
 						post_content LIKE '%http://%'
 						OR post_content LIKE '%https://%'
@@ -1314,7 +1329,10 @@ function aklh_request_handler() {
 					LEFT JOIN $wpdb->ak_linkharvest lh
 					ON p.ID = lh.post_id
 					WHERE lh.domain_id = '$domain_id'
-					AND p.post_status = 'publish'
+					AND (
+						post_status = 'publish'
+						OR post_status = 'static'
+					)
 					GROUP BY p.ID
 					ORDER BY p.post_date DESC
 				");
@@ -1402,7 +1420,7 @@ function aklh_show_for_domain(domain_id, type) {
 	var target = $('domain_' + domain_id);
 	target.innerHTML = '<span class="loading">Loading...</span>';
 	target.style.display = "block";
-	var url = "<?php bloginfo('wpurl'); ?>/wp-admin/options-general.php";
+	var url = "<?php bloginfo('wpurl'); ?>/index.php";
 	var aklhAjax = new Ajax.Updater(
 		target,
 		url,

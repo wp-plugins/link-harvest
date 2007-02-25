@@ -2,7 +2,7 @@
 Tags: link, links, report, reporting, blogroll
 Contributors: alexkingorg
 Requires at least: 2.0
-Tested up to: 2.0.5
+Tested up to: 2.1
 Stable tag: 1.0
 
 Link Harvest will go through all of your posts and pages and compile a list of all external links. Then it will create a live updating linkroll for you, based on your actual linking activity.
@@ -33,7 +33,6 @@ Your links list is available to you at all times in the WordPress Admin interfac
 
 == Showing your Link Harvest ==
 
-
 = Token Method =
 
 The token method is the easier way to show your links list, and is enabled by default. To show your links list, simply add the following to a page or post:
@@ -54,7 +53,11 @@ You can always add a template tag to your theme (in a page template perhaps) to 
 
 To add a links list to your sidebar (like a blogroll), you can use the following template tag:
 
-`<?php aklh_top_links($count = 10); ?>`
+`<?php aklh_top_links(); ?>`
+
+This will show the top 10 links, to show a different number of links set the number like so:
+
+`<?php aklh_top_links(25); ?>`
 
 
 == Known Issues ==
