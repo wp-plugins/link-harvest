@@ -61,8 +61,8 @@ if (!function_exists('ak_prototype')) {
 }
 
 
-$wpdb->ak_domains = $table_prefix.'ak_domains';
-$wpdb->ak_linkharvest = $table_prefix.'ak_linkharvest';
+$wpdb->ak_domains = $wpdb->prefix.'ak_domains';
+$wpdb->ak_linkharvest = $wpdb->prefix.'ak_linkharvest';
 
 $aklh = new ak_link_harvest;
 
