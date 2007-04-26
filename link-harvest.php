@@ -1518,6 +1518,13 @@ if ($aklh->token) {
 	add_action('the_content', 'aklh_the_content');
 }
 
+function aklh_the_excerpt($content) {
+	return str_replace('###linkharvest###', '', $content);;
+}
+if ($aklh->token) {
+	add_action('the_excerpt', 'aklh_the_excerpt');
+}
+
 function aklh_get_harvest($count = 50) {
 	ob_start();
 	aklh_show_harvest($count);
