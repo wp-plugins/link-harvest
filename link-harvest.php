@@ -4,7 +4,7 @@
 Plugin Name: Link Harvest
 Plugin URI: http://alexking.org/projects/wordpress
 Description: This will harvest links from your WordPress database, creating a links list sorted by popularity. Once you have activated the plugin, you can configure the <a href="options-general.php?page=link-harvest.php">Settings</a> and see your <a href="index.php?page=link-harvest.php">list of links</a>. Also see <a href="options-general.php?page=link-harvest.php#aklh_template_tags">how to show the list of links</a> in your blog. Questions on configuration, etc.? Make sure to read the README.
-Version: 1.1b1
+Version: 1.1
 Author: Alex King
 Author URI: http://alexking.org
 */ 
@@ -247,7 +247,7 @@ class ak_link_harvest {
 		if (preg_match_all($regex, $body, $links)) {
 			foreach ($links[1] as $link) {
 				if (in_array(substr($link, 0, 7), array('http://', 'https:/')) && !$this->excluded_file_type($link)) {
-					$urls[] = $link;
+					$urls[] = trim($link);
 				}
 			}
 		}
@@ -314,35 +314,42 @@ class ak_link_harvest {
 		foreach ($links as $link) {
 // FeedBurner hack, working around this:
 // http://alexking.org/blog/2006/12/01/why-i-dont-use-feedburner
-			if (strstr($link, '/feeds.feedburner.com/') || strstr($link, '/~r/')) {
-				require_once(ABSPATH.WPINC.'/class-snoopy.php');
-				$snoop = new Snoopy;
-				$snoop->maxlength = 2000;
-				$snoop->read_timeout = $this->timeout;
-				$snoop->fetch($link);
-				if (!empty($snoop->lastredirectaddr)) {
-					$link = $snoop->lastredirectaddr;
-				}
-			}
-			$domain = $this->get_domain($link);
-			if (!empty($domain)) {
-				foreach ($this->exclude as $exclude) {
-					if (strstr($domain, $exclude)) {
-						return;
+			if (!empty($link)) {
+				if (strstr($link, '/feeds.feedburner.com/') || strstr($link, '/~r/')) {
+					require_once(ABSPATH.WPINC.'/class-snoopy.php');
+					$snoop = new Snoopy;
+					$snoop->maxlength = 2000;
+					$snoop->read_timeout = $this->timeout;
+					$snoop->fetch($link);
+					if (!empty($snoop->lastredirectaddr)) {
+						$link = $snoop->lastredirectaddr;
 					}
 				}
-				if (isset($domain_count[$domain])) {
-					$domain_count[$domain]++;
+				$domain = $this->get_domain($link);
+				if (!empty($domain)) {
+					foreach ($this->exclude as $exclude) {
+						if (strstr($domain, $exclude)) {
+							return;
+						}
+					}
+					if (isset($domain_count[$domain])) {
+						$domain_count[$domain]++;
+					}
+					else {
+						$domains[] = $domain;
+						$domain_count[$domain] = 1;
+					}
+					$harvest[] = array($link, $domain);
 				}
-				else {
-					$domains[] = $domain;
-					$domain_count[$domain] = 1;
-				}
-				$harvest[] = array($link, $domain);
+
+				aklh_log('Processed link: '.$link);
+
 			}
+			else {
 
-			aklh_log('Processed link: '.$link);
+				aklh_log('Skipped link: '.$link);
 
+			}
 		}
 		
 		if (count($domains) > 0) {
@@ -1202,6 +1209,9 @@ function aklh_request_handler() {
 			case 'harvest_posts':
 				ini_set('display_errors', '0');
 				ini_set('error_reporting', E_PARSE);
+				
+				@set_time_limit(999999999999999999999);
+				
 				$aklk = new ak_link_harvest;
 				$aklk->get_settings();
 				if ($aklh->harvest_enabled != 1) {
@@ -1219,6 +1229,19 @@ function aklh_request_handler() {
 				else {
 					$limit = $aklh->default_limit;;
 				}
+				
+				if ($start == 0) {
+					aklh_log("\n\n\n".'Starting a new harvest'."\n".'PHP Version is: '.phpversion());
+					$plugins = get_option('active_plugins');
+					if (is_array($plugins) && count($plugins) > 0) {
+						foreach ($plugins as $plugin) {
+							aklh_log('Active plugin: '.$plugin);
+						}
+					}
+				}
+
+				aklh_log("\n".'Starting with offset "'.$start.'"'."\n");
+				
 				$aklk->harvest_posts(null, $start, $limit);
 				$count = $wpdb->get_var("
 					SELECT count(ID)
@@ -1237,6 +1260,9 @@ function aklh_request_handler() {
 					update_option('aklh_harvest_enabled', '0');
 					$completed = $count;
 				}
+				
+				aklh_log('Returning "'.''.$completed.'"'."\n");
+				
 				die(''.$completed);
 				break;
 			case 'backfill_domain_titles':
@@ -1516,6 +1542,13 @@ function aklh_the_content($content) {
 }
 if ($aklh->token) {
 	add_action('the_content', 'aklh_the_content');
+}
+
+function aklh_the_excerpt($content) {
+	return str_replace('###linkharvest###', '', $content);;
+}
+if ($aklh->token) {
+	add_action('the_excerpt', 'aklh_the_excerpt');
 }
 
 function aklh_get_harvest($count = 50) {
