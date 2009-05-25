@@ -2,8 +2,8 @@
 Tags: link, links, report, reporting, blogroll
 Contributors: alexkingorg
 Requires at least: 2.0
-Tested up to: 2.3
-Stable tag: 1.1
+Tested up to: 2.7.1
+Stable tag: 1.2
 
 Link Harvest will go through all of your posts and pages and compile a list of all external links. Then it will create a live updating linkroll for you, based on your actual linking activity.
 
