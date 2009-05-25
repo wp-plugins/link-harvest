@@ -3,8 +3,8 @@
 /*
 Plugin Name: Link Harvest
 Plugin URI: http://alexking.org/projects/wordpress
-Description: This will harvest links from your WordPress database, creating a links list sorted by popularity. Once you have activated the plugin, you can configure the <a href="options-general.php?page=link-harvest.php">Settings</a> and see your <a href="index.php?page=link-harvest.php">list of links</a>. Also see <a href="options-general.php?page=link-harvest.php#aklh_template_tags">how to show the list of links</a> in your blog. Questions on configuration, etc.? Make sure to read the README.
-Version: 1.1
+Description: This will harvest links from your WordPress database, creating a links list sorted by popularity. Once you have activated the plugin, you can configure your settings and see your <a href="index.php?page=link-harvest.php">list of links</a>. Also see <a href="options-general.php?page=link-harvest.php#aklh_template_tags">how to show the list of links</a> in your blog. Questions on configuration, etc.? Make sure to read the README.
+Version: 1.2
 Author: Alex King
 Author URI: http://alexking.org
 */ 
@@ -24,9 +24,10 @@ Author URI: http://alexking.org
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
 // **********************************************************************
 
-@define('AK_WPROOT', '../../');
+if (!defined('AKLH_LOADED')) : // WP does weird stuff with plugin file loading for activation hooks
 
-@define('AKLH_DEBUG', false);
+define('AKLH_LOADED', true);
+define('AKLH_DEBUG', false);
 
 if (AKLH_DEBUG) {
 //	ini_set('display_errors', '1');
@@ -37,11 +38,21 @@ if (AKLH_DEBUG) {
 	}
 }
 
-if (!isset($wpdb)) {
-	require(AK_WPROOT.'wp-blog-header.php');
-}
-
 load_plugin_textdomain('link-harvest');
+
+// function aklh_install() {
+// 	global $wpdb;
+// 	$wpdb->ak_domains = $wpdb->prefix.'ak_domains';
+// 	$wpdb->ak_linkharvest = $wpdb->prefix.'ak_linkharvest';
+// 	$tables = $wpdb->get_col("
+// 		SHOW TABLES
+// 	");
+// 	if (!in_array($wpdb->ak_linkharvest, $tables) && !in_array($wpdb->ak_domains, $tables)) {
+// 		$aklh = new ak_link_harvest;
+// 		$aklh->install();
+// 	}
+// }
+// register_activation_hook(__FILE__, 'aklh_install');
 
 if (!function_exists('is_admin_page')) {
 	function is_admin_page() {
@@ -57,37 +68,25 @@ if (!function_exists('is_admin_page')) {
 	}
 }
 
-if (!function_exists('ak_prototype')) {
-	function ak_prototype() {
-		if (!function_exists('wp_enqueue_script')) {
-			global $ak_prototype;
-			if (!isset($ak_prototype) || !$ak_prototype) {
-				print('
-		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/wp-includes/js/prototype.js"></script>
-				');
-			}
-			$ak_prototype = true;
-		}
-	}
+function aklh_init() {
+	global $aklh, $wpdb;
+	$wpdb->ak_domains = $wpdb->prefix.'ak_domains';
+	$wpdb->ak_linkharvest = $wpdb->prefix.'ak_linkharvest';
+	
+	$aklh = new ak_link_harvest;
+	$aklh->get_settings();
 }
+add_action('init', 'aklh_init');
 
-
-$wpdb->ak_domains = $wpdb->prefix.'ak_domains';
-$wpdb->ak_linkharvest = $wpdb->prefix.'ak_linkharvest';
-
-$aklh = new ak_link_harvest;
-
-// CHECK FOR LINK HARVEST TABLES
-
-if (isset($_GET['activate']) && $_GET['activate'] == 'true') {
-	$tables = $wpdb->get_col("
-		SHOW TABLES
-	");
-	if (!in_array($wpdb->ak_linkharvest, $tables) && !in_array($wpdb->ak_domains, $tables)) {
-		$aklh->install();
+function aklh_plugin_action_links($links, $file) {
+	$plugin_file = basename(__FILE__);
+	if (basename($file) == $plugin_file) {
+		$settings_link = '<a href="options-general.php?page='.$plugin_file.'">'.__('Settings', 'link-harvest').'</a>';
+		array_unshift($links, $settings_link);
 	}
+	return $links;
 }
-$aklh->get_settings();
+add_filter('plugin_action_links', 'aklh_plugin_action_links', 10, 2);
 
 class ak_link_harvest {
 	var $exclude;
@@ -134,6 +133,12 @@ class ak_link_harvest {
 	
 	function install() {
 		global $wpdb;
+		$tables = $wpdb->get_col("
+			SHOW TABLES
+		");
+		if (in_array($wpdb->ak_linkharvest, $tables) || in_array($wpdb->ak_domains, $tables)) {
+			return;
+		}
 		$result = $wpdb->query("
 			CREATE TABLE `$wpdb->ak_domains` (
 			`id` int(11) NOT NULL auto_increment,
@@ -188,6 +193,7 @@ class ak_link_harvest {
 	}
 	
 	function update_settings() {
+		$this->install();
 		foreach ($this->options as $option => $type) {
 			if (isset($_POST[$option])) {
 				switch ($type) {
@@ -515,12 +521,18 @@ class ak_link_harvest {
 					post_status = 'publish'
 					OR post_status = 'static'
 				)
-				AND post_content LIKE '%http://%'
+				AND (
+					post_content LIKE '%http://%'
+					OR post_content LIKE '%https://%'
+				)
 				ORDER BY ID
 				LIMIT $start, $limit
 			");
 		}
 		foreach ($posts as $post) {
+			if (function_exists('wp_is_post_revision') && wp_is_post_revision($post->ID)) {
+				continue;
+			}
 
 			aklh_log('== Start processing post id: '.$post->ID);
 
@@ -750,7 +762,7 @@ class ak_link_harvest {
 					<fieldset>
 						<p>'.__('When you are ready to harvest (or re-harvest) your links, press this button', 'link-harvest').'</p>
 						<p class="submit">
-							<input type="button" name="recount" value="'.__('(Re) Harvest All Links', 'link-harvest').'" onclick="if ($(\'harvest_enabled_y\').checked) { location.href=\''.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=harvest\'; } else { alert(\'Please enable link harvesting, save your settings, then try again.\'); }" />
+							<input type="button" name="recount" value="'.__('(Re) Harvest All Links', 'link-harvest').'" onclick="if (jQuery(\'#harvest_enabled_y:checked\').size()) { location.href=\''.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=harvest\'; } else { alert(\'Please enable link harvesting, save your settings, then try again.\'); }" />
 						</p>					
 					</fieldset>
 				</form>
@@ -806,23 +818,20 @@ class ak_link_harvest {
 				$js = '
 	var count = '.$count.';
 	function harvest_links(start, limit) {
-		$("submit").style.display = "none";
-		$("progress").style.display = "block";
-		$("cancel").style.display = "block";
-		var url = "'.get_bloginfo('wpurl').'/wp-admin/options-general.php";
-		var pars = "ak_action=harvest_posts&start=" + start + "&limit=" + limit;
-		var aklhAjax = new Ajax.Updater(
-			$("count"),
-			url,
+		jQuery("#submit").hide();
+		jQuery("#progress, #cancel").show();
+		jQuery("#count").load(
+			"'.get_bloginfo('wpurl').'/wp-admin/options-general.php",
 			{
-				method: "post",
-				parameters: pars,
-				onComplete: harvest_progress
-			}
+				"ak_action": "harvest_posts",
+				"start": start,
+				"limit": limit
+			},
+			harvest_progress
 		);
 	}
 	function harvest_progress() {
-		var progress = $("count").innerHTML;
+		var progress = jQuery("#count").html();
 		if (progress == "") {
 			harvest_error();
 			return;
@@ -832,9 +841,8 @@ class ak_link_harvest {
 			harvest_links(processed_count, '.$this->default_limit.');
 		}
 		else if (processed_count >= count) {
-			$("progress").style.display = "none";
-			$("cancel").style.display = "none";
-			$("complete").style.display = "block";
+			jQuery("#progress, #cancel").hide();
+			jQuery("#complete").show();
 		}
 		else {
 			harvest_error();
@@ -842,9 +850,8 @@ class ak_link_harvest {
 		}
 	}
 	function harvest_error() {
-		$("progress").style.display = "none";
-		$("cancel").style.display = "none";
-		$("error").style.display = "block";
+		jQuery("#progress, #cancel").hide();
+		jQuery("#complete").show();
 	}
 				';
 				$body = '
@@ -882,43 +889,40 @@ class ak_link_harvest {
 				");
 				$js = '
 	function backfill_titles(last, limit) {
-		$("submit").style.display = "none";
-		$("progress").style.display = "block";
-		$("cancel").style.display = "block";
+		jQuery("#submit").hide();
+		jQuery("#progress, #cancel").show();
 		var url = "'.get_bloginfo('wpurl').'/wp-admin/options-general.php";
 		var pars = "ak_action=backfill_domain_titles&last=" + last + "&limit=" + limit;
-		var aklhAjax = new Ajax.Updater(
-			$("last"),
-			url,
+		jQuery("#last").load(
+			"'.get_bloginfo('wpurl').'/wp-admin/options-general.php",
 			{
-				method: "post",
-				parameters: pars,
-				onComplete: backfill_progress
-			}
+				"ak_action": "backfill_domain_titles",
+				"last": last,
+				"limit": limit
+			},
+			backfill_progress
 		);
 	}
 	function backfill_progress() {
-		var last = $("last").innerHTML;
+		var last = jQuery("#last").html();
 		if (last == "") {
 			backfill_error();
 			return;
 		}
 		if (last == "done") {
-			$("progress").style.display = "none";
-			$("cancel").style.display = "none";
-			$("complete").style.display = "block";
+			jQuery("#progress, #cancel").hide();
+			jQuery("#complete").show();
 			return;
 		}
-		var counter = $("count");
-		var processed_count = parseInt(counter.innerHTML);
+		var counter = jQuery("#count");
+		var processed_count = parseInt(counter.html());
 		processed_count++;
-		counter.innerHTML = processed_count;
+		counter.html(processed_count);
 		backfill_titles(last, 1);
 	}
 	function backfill_error() {
-		$("progress").style.display = "none";
-		$("cancel").style.display = "none";
-		$("error").style.display = "block";
+		jQuery("#progress, #cancel").hide();
+		jQuery("#error").show();
 	}
 				';
 				$body = '
@@ -958,43 +962,38 @@ class ak_link_harvest {
 				");
 				$js = '
 	function backfill_titles(last, limit) {
-		$("submit").style.display = "none";
-		$("progress").style.display = "block";
-		$("cancel").style.display = "block";
-		var url = "'.get_bloginfo('wpurl').'/wp-admin/options-general.php";
-		var pars = "ak_action=backfill_page_titles&last=" + last + "&limit=" + limit;
-		var aklhAjax = new Ajax.Updater(
-			$("last"),
-			url,
+		jQuery("#submit").hide();
+		jQuery("#progress, #cancel").show();
+		jQuery("#last").load(
+			"'.get_bloginfo('wpurl').'/wp-admin/options-general.php",
 			{
-				method: "post",
-				parameters: pars,
-				onComplete: backfill_progress
-			}
+				"ak_action": "backfill_page_titles",
+				"last": last,
+				"limit": limit
+			},
+			backfill_progress
 		);
 	}
 	function backfill_progress() {
-		var last = $("last").innerHTML;
+		var last = jQuery("#last").html();
 		if (last == "") {
 			backfill_error();
 			return;
 		}
 		if (last == "done") {
-			$("progress").style.display = "none";
-			$("cancel").style.display = "none";
-			$("complete").style.display = "block";
+			jQuery("#progress, #cancel").hide();
+			jQuery("#complete").show();
 			return;
 		}
-		var counter = $("count");
-		var processed_count = parseInt(counter.innerHTML);
+		var counter = jQuery("#count");
+		var processed_count = parseInt(counter.html());
 		processed_count++;
-		counter.innerHTML = processed_count;
+		counter.html(processed_count);
 		backfill_titles(last, 1);
 	}
 	function backfill_error() {
-		$("progress").style.display = "none";
-		$("cancel").style.display = "none";
-		$("error").style.display = "block";
+		jQuery("#progress").hide();
+		jQuery("#cancel, #error").show();
 	}
 				';
 				$body = '
@@ -1040,7 +1039,7 @@ class ak_link_harvest {
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 	<title>'.__('Link Harvest', 'link-harvest').'</title>
-	<script src="'.get_bloginfo('wpurl').'/wp-includes/js/prototype.js" type="text/javascript"></script>
+	<script src="'.get_bloginfo('wpurl').'/wp-includes/js/jquery/jquery.js" type="text/javascript"></script>
 	<script type="text/javascript">
 	'.$js.'
 	</script>
@@ -1159,14 +1158,9 @@ function aklh_options() {
 	}
 }
 
-function aklh_init() {
-	if (function_exists('wp_enqueue_script')) {
-		wp_enqueue_script('prototype');
-	}
-}
+wp_enqueue_script('jquery');
 
 function aklh_head() {
-	ak_prototype();
 	print('
 		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_js"></script>
 		<link rel="stylesheet" type="text/css" href="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_css" />
@@ -1174,7 +1168,6 @@ function aklh_head() {
 }
 
 function aklh_admin_head() {
-	ak_prototype();
 	print('
 		<script type="text/javascript" src="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_js"></script>
 		<link rel="stylesheet" type="text/css" href="'.get_bloginfo('wpurl').'/index.php?ak_action=lh_css" />
@@ -1209,13 +1202,11 @@ function aklh_request_handler() {
 			case 'harvest_posts':
 				ini_set('display_errors', '0');
 				ini_set('error_reporting', E_PARSE);
-				
+
 				@set_time_limit(999999999999999999999);
 				
-				$aklk = new ak_link_harvest;
-				$aklk->get_settings();
 				if ($aklh->harvest_enabled != 1) {
-					die();
+					die('disabled');
 				}
 				if (!empty($_POST['start'])) {
 					$start = intval($_POST['start']);
@@ -1241,8 +1232,9 @@ function aklh_request_handler() {
 				}
 
 				aklh_log("\n".'Starting with offset "'.$start.'"'."\n");
-				
-				$aklk->harvest_posts(null, $start, $limit);
+
+				$aklh->harvest_posts(null, $start, $limit);
+
 				$count = $wpdb->get_var("
 					SELECT count(ID)
 					FROM $wpdb->posts
@@ -1381,7 +1373,7 @@ function aklh_request_handler() {
 					ORDER BY post_id DESC
 				");
 				print('
-					<a href="javascript:void($(\'domain_'.$domain_id.'\').style.display=\'none\');" class="close">Close</a>
+					<a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());" class="close">Close</a>
 					<h4>'.__('Links', 'link-harvest').'</h4>
 					<ul>
 				');
@@ -1429,7 +1421,7 @@ function aklh_request_handler() {
 					ORDER BY p.post_date DESC
 				");
 				print('
-					<a href="javascript:void($(\'domain_'.$domain_id.'\').style.display=\'none\');" class="close">Close</a>
+					<a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());" class="close">Close</a>
 					<h4>'.__('Posts and Pages', 'link-harvest').'</h4>
 					<ul>
 				');
@@ -1511,20 +1503,16 @@ function aklh_show_for_domain(domain_id, type) {
 	switch (type) {
 		case 'posts':
 		case 'links':
-			var pars = "ak_action=show_" + type + "&domain_id=" + domain_id;
+			var pars = {
+				"ak_action": "show_" + type,
+				"domain_id": domain_id
+			};
 	}
-	var target = $('domain_' + domain_id);
-	target.innerHTML = '<span class="loading">Loading...</span>';
-	target.style.display = "block";
-	var url = "<?php bloginfo('wpurl'); ?>/index.php";
-	var aklhAjax = new Ajax.Updater(
-		target,
-		url,
-		{
-			method: "get",
-			parameters: pars
-		}
-	);
+	var target = jQuery('#domain_' + domain_id);
+	target.html('<span class="loading">Loading...</span>').show();
+	jQuery.get("<?php bloginfo('wpurl'); ?>/index.php", pars, function(data) {
+		target.hide().html(data).slideDown();
+	});
 }
 <?php
 			die();
@@ -1604,5 +1592,7 @@ add_action('delete_post', 'aklh_post_delete');
 
 add_action('publish_page', 'aklh_publish', 999);
 add_action('delete_page', 'aklh_post_delete');
+
+endif; // end weirdness check
 
 ?>
