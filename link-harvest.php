@@ -610,7 +610,9 @@ class ak_link_harvest {
 		$snoop = new Snoopy;
 		$snoop->maxlength = 2000;
 		$snoop->read_timeout = $this->timeout;
+		ob_start();
 		$snoop->fetch($url);
+		ob_end_clean();
 
 		$start = '<title>';
 		$end = '<\/title>';
