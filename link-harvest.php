@@ -24,6 +24,17 @@ Author URI: http://alexking.org
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. 
 // **********************************************************************
 
+/* TODO:
+
+Warning: strstr(): Empty delimiter
+
+plugins/link-harvest/link-harvest.php on line 337
+
+fix:
+if (!empty($exclude) && strstr($domain, $exclude)) {
+
+*/
+
 if (!defined('AKLH_LOADED')) : // WP does weird stuff with plugin file loading for activation hooks
 
 define('AKLH_LOADED', true);
