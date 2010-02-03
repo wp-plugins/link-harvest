@@ -86,6 +86,10 @@ function aklh_init() {
 	
 	$aklh = new ak_link_harvest;
 	$aklh->get_settings();
+	if ($aklh->token) {
+		add_action('the_content', 'aklh_the_content');
+		add_action('the_excerpt', 'aklh_the_excerpt');
+	}
 }
 add_action('init', 'aklh_init');
 
@@ -1541,15 +1545,9 @@ function aklh_the_content($content) {
 	}
 	return $content;
 }
-if ($aklh->token) {
-	add_action('the_content', 'aklh_the_content');
-}
 
 function aklh_the_excerpt($content) {
 	return str_replace('###linkharvest###', '', $content);;
-}
-if ($aklh->token) {
-	add_action('the_excerpt', 'aklh_the_excerpt');
 }
 
 function aklh_get_harvest($count = 50) {
