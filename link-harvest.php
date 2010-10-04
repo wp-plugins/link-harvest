@@ -85,6 +85,11 @@ function aklh_init() {
 	
 	$aklh = new ak_link_harvest;
 	$aklh->get_settings();
+	if (!is_admin()) {
+		wp_enqueue_script('jquery');
+		wp_enqueue_script('aklh_js', esc_url(site_url('index.php?ak_action=lh_js')), 'jquery');
+		wp_enqueue_style('aklh_css', esc_url(site_url('index.php?ak_action=lh_css')));
+	}
 }
 add_action('init', 'aklh_init');
 
@@ -655,17 +660,54 @@ class ak_link_harvest {
 	
 	function show_harvest($limit = 50, $type = 'table') {
 		global $wpdb;
-		$domains = $wpdb->get_results("
-			SELECT *
-			FROM $wpdb->ak_domains
-			ORDER BY count DESC
-			LIMIT $limit
-		");
 		$i = 1;
 		switch ($type) {
 			case 'table':
-				print('
-<table class="aklh_harvest">
+			if (is_admin()) {
+				$per_page = 20;
+				$pagenum = isset($_GET['paged']) ? absint($_GET['paged']) : 0;
+				if (empty($pagenum)) $pagenum = 1;
+				$offset = ($pagenum - 1) * $per_page;
+				$domains = $wpdb->get_results("
+					SELECT SQL_CALC_FOUND_ROWS *
+					FROM $wpdb->ak_domains
+					ORDER BY count DESC
+					LIMIT $offset, $per_page
+				");
+				$overall_count = $wpdb->get_var("SELECT FOUND_ROWS()");
+				if ($overall_count > 0) {
+					$num_pages = ceil($overall_count / $per_page);
+					$page_links = paginate_links(array(
+						'base' => add_query_arg('paged', '%#%'),
+						'format' => '',
+						'prev_text' => __('&laquo;'),
+						'next_text' => __('&raquo;'),
+						'total' => $num_pages,
+						'current' => $pagenum
+					));
+					if ($page_links) {
+						echo '<div class="tablenav"><div class="tablenav-pages">';
+						$page_links_text = sprintf('<span class="displaying-num">'.__('Displaying %s&#8211;%s of %s', '404-notifier').'</span>%s',
+							number_format_i18n(($pagenum-1) * $per_page+1),
+							number_format_i18n(min($pagenum * $per_page, $overall_count)),
+							number_format_i18n($overall_count),
+							$page_links
+						);
+						echo $page_links_text.'</div><div class="clear"></div></div>';
+					}
+				}
+				echo '<table class="widefat post">';
+			}
+			else {
+				$domains = $wpdb->get_results("
+					SELECT *
+					FROM $wpdb->ak_domains
+					ORDER BY count DESC
+					LIMIT $limit
+				");
+				echo '<table class="aklh_harvest">';
+			}
+				echo('
 	<thead>
 		<tr>
 			<th>'.__('Web Site', 'link-harvest').'</th>
@@ -1238,32 +1280,22 @@ function aklh_options() {
 	);
 }
 
-wp_enqueue_script('jquery');
-
-function aklh_head() {
-	print('
-		<script type="text/javascript" src="'.esc_url(site_url('index.php?ak_action=lh_js')).'"></script>
-		<link rel="stylesheet" type="text/css" href="'.esc_url(site_url('index.php?ak_action=lh_css')).'" />
-	');
-}
-
 function aklh_admin_init() {
 	if (is_admin() && $_GET['page'] == basename(__FILE__)) {
 		CF_Admin::cf_load_js();
 		CF_Admin::cf_load_css();
-		print('
-			<script type="text/javascript" src="'.esc_url(site_url('index.php?ak_action=lh_js')).'"></script>
-			<link rel="stylesheet" type="text/css" href="'.esc_url(site_url('index.php?ak_action=lh_css')).'" />
-		');
+		wp_enqueue_script('jquery');
+		wp_enqueue_script('aklh_js', esc_url(site_url('index.php?ak_action=lh_js')), 'jquery');
+		wp_enqueue_style('aklh_css', esc_url(site_url('index.php?ak_action=lh_css')));
 	}
 }
 
 function aklh_admin_show_harvest() {
 	global $aklh;
-	print('
-		<div class="wrap">
-			<h2>'.__('Link Harvest', 'link-harvest').'</h2>
-			<p>'.__('Set domains to exclude and how many links to display in this list on the <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">options page</a>.', 'link-harvest').'</p>
+	echo '<div class="wrap">';
+	CF_Admin::cf_admin_header(__('Link Harvest', 'link-harvest'), 'Link Harvest', AKLH_VERSION);
+	echo ('
+		<p>'.__('Set domains to exclude and how many links to display in this list on the <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">options page</a>.', 'link-harvest').'</p>
 	');
 	$aklh->show_harvest(get_option('aklh_table_length'));
 	print('
@@ -1459,9 +1491,9 @@ function aklh_request_handler() {
 					ORDER BY post_id DESC
 				");
 				echo('
-					<div><a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());" class="close">'.__('Close', 'link-harvest').'</a>
-					<h4>'.__('Links', 'link-harvest').'</h4></div>
-					<ul>
+					<div>
+					<h4 class="aklh-h4">'.__('Links', 'link-harvest').' &nbsp - &nbsp <a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());">'.__('Close', 'link-harvest').'</a></h4></div>
+					<ul class="aklh-ul">
 				');
 				if (count($links) > 0) {
 					foreach ($links as $link) {
@@ -1507,9 +1539,9 @@ function aklh_request_handler() {
 					ORDER BY p.post_date DESC
 				");
 				echo('
-					<div><a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());" class="close">'.__('Close', 'link-harvest').'</a>
-					<h4>'.__('Posts and Pages', 'link-harvest').'</h4> </div>
-					<ul>
+					<div>
+					<h4 class="aklh-h4">'.__('Posts and Pages', 'link-harvest').' &nbsp - &nbsp <a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());">'.__('Close', 'link-harvest').'</h4> </div>
+					<ul class="aklh-ul">
 				');
 				if (count($posts) > 0) {
 					global $post;
@@ -1533,6 +1565,16 @@ function aklh_request_handler() {
 			case 'lh_css':
 				header("Content-type: text/css");
 ?>
+.aklh-h4 {
+	margin:0;
+	padding:10px 0 10px 0;
+	display:block;
+	font-size:13px
+}
+.aklh-ul{
+	margin-left:10px;
+	padding-left: 10px;
+}
 table.aklh_harvest {
 }
 table.aklh_harvest th, table.aklh_harvest td {
@@ -1670,7 +1712,6 @@ function aklh_log($msg) {
 // -- GET HOOKED
 
 add_action('init', 'aklh_init');
-add_action('wp_head', 'aklh_head');
 
 add_action('admin_menu', 'aklh_options');
 add_action('admin_init', 'aklh_admin_init');
