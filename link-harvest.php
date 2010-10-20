@@ -39,11 +39,10 @@ if (AKLH_DEBUG) {
 		die(__('Debugging is enabled, but there is no wp-content/plugins/aklh_log.txt file or the file is not writeable.', 'link-harvest'));
 	}
 }
-
-load_plugin_textdomain('link-harvest', false, dirname(plugin_basename(__FILE__)) . '/language');
-define('CF_TEST_DIR', 'link-harvest'); //Used in local testing, comment out on production
-
 define('AKLH_VERSION', '1.3');
+
+load_plugin_textdomain('link-harvest');
+
 if (is_file(trailingslashit(WP_PLUGIN_DIR).'link-harvest.php')) {
 	define('AKLH_FILE', trailingslashit(WP_PLUGIN_DIR).'link-harvest.php');
 	define('AKLH_DIR_URL', trailingslashit(WP_PLUGIN_URL));
@@ -53,10 +52,11 @@ else if (is_file(trailingslashit(WP_PLUGIN_DIR).'link-harvest/link-harvest.php')
 	define('AKLH_DIR_URL', trailingslashit(WP_PLUGIN_URL).'link-harvest/');
 }
 
-require_once(trailingslashit(dirname(AKLH_FILE)) . 'cf-admin/cf-admin.php');
+define('CF_ADMIN_DIR', 'link-harvest/cf-admin/');
+require_once('cf-admin/cf-admin.php');
 
 function aklh_activate() {
- 	if (aklh_is_multisite_and_network_activation()) {
+ 	if (aklh_is_multisite() && aklh_is_network_activation()) {
 		aklh_activate_for_network();
 	}
 	else {
@@ -72,7 +72,7 @@ function aklh_activate_single() {
  	$tables = $wpdb->get_col("
  		SHOW TABLES
  	");
- 	if (!in_array($wpdb->ak_linkharvest, $tables) && !in_array($wpdb->ak_domains, $tables)) {
+ 	if (!in_array($wpdb->ak_linkharvest, $tables) || !in_array($wpdb->ak_domains, $tables)) {
  		$aklh = new ak_link_harvest;
  		$aklh->install();
 	}
@@ -87,7 +87,7 @@ function aklh_init() {
 	$aklh->get_settings();
 	if (!is_admin()) {
 		wp_enqueue_script('jquery');
-		wp_enqueue_script('aklh_js', esc_url(site_url('index.php?ak_action=lh_js')), 'jquery');
+		wp_enqueue_script('aklh_js', esc_url(site_url('index.php?ak_action=lh_js')), array('jquery'));
 		wp_enqueue_style('aklh_css', esc_url(site_url('index.php?ak_action=lh_css')));
 	}
 }
@@ -98,6 +98,8 @@ function aklh_plugin_action_links($links, $file) {
 	if (basename($file) == $plugin_file) {
 		$settings_link = '<a href="'.esc_url(admin_url('options-general.php?page='.$plugin_file)).'">'.__('Settings', 'link-harvest').'</a>';
 		array_unshift($links, $settings_link);
+		$links_list_link = '<a href="'.esc_url(admin_url('index.php?page='.$plugin_file)).'">'.__('Links List', 'link-harvest').'</a>';
+		array_unshift($links, $links_list_link);
 	}
 	return $links;
 }
@@ -111,6 +113,8 @@ class ak_link_harvest {
 	var $default_limit;
 	var $timeout;
 	var $token;
+	var $credit;
+	var $show_num_links;
 	
 	function ak_link_harvest() {
 		$this->exclude = array();
@@ -118,12 +122,15 @@ class ak_link_harvest {
 		$this->harvest_enabled = 1;
 		$this->default_limit = 5;
 		$this->timeout = 2;
-		$this->token = 1;
+		$this->token = 0;
+		$this->credit = 1;
 		$this->options = array(
 			'exclude' => 'explode',
 			'table_length' => 'int',
 			'harvest_enabled' => 'int',
-			'token' => 'int'
+			'token' => 'int',
+			'credit' => 'int',
+			'show_num_links' => 'int'
 		);
 		$this->excluded_file_extensions = array(
 			'.mov',
@@ -180,9 +187,11 @@ class ak_link_harvest {
 			");
 		}
 		add_option('aklh_exclude', '');
-		add_option('aklh_table_length', '100');
+		add_option('aklh_table_length', '50');
 		add_option('aklh_harvest_enabled', '1');
 		add_option('aklh_token', '0');
+		add_option('aklh_show_num_links', '1');
+		add_option('aklh_credit', '1');
 	}
 	
 	function clear_data() {
@@ -226,13 +235,12 @@ class ak_link_harvest {
 				update_option('aklh_'.$option, $value);
 			}
 		}
-
-		header('Location: '.admin_url('options-general.php?page=link-harvest.php&updated=true'));
-		die();
 	}
 	
 	function excluded_file_type($link) {
-		foreach ($this->excluded_file_extensions as $ext) {
+		$excluded_file_extensions = $this->excluded_file_extensions;
+		$excluded_file_extensions = apply_filters('aklh_excluded_file_type', $excluded_file_extensions);
+		foreach ($excluded_file_extensions as $ext) {
 			if (substr($link, strlen($ext) * -1) == $ext) {
 				return true;
 			}
@@ -274,18 +282,32 @@ class ak_link_harvest {
 				}
 			}
 		}
-		
 		return $urls;
+	}
+	
+	function get_num_links($url) {
+		global $wpdb;
+		$count = $wpdb->get_var( $wpdb->prepare("
+			SELECT COUNT(*)
+			FROM $wpdb->ak_linkharvest
+			WHERE url = %s",
+			$url
+		));
+		if ($count === false) {
+			return 0;
+		}
+		return $count;
 	}
 	
 	function get_domain_id($domain) {
 		global $wpdb;
-		$domain_id = $wpdb->get_var("
+		$domain_id = $wpdb->get_var( $wpdb->prepare("
 			SELECT id
 			FROM $wpdb->ak_domains
-			WHERE domain = '$domain'
-		");
-		if ($domain_id && !is_null($omain_id)) {
+			WHERE domain = %s",
+			$domain
+		));
+		if ($domain_id && !is_null($domain_id)) {
 			return $domain_id;
 		}
 		else {
@@ -306,8 +328,9 @@ class ak_link_harvest {
 		$results = $wpdb->get_results("
 			SELECT id, domain
 			FROM $wpdb->ak_domains
-			WHERE domain IN ('".implode("', '", $domains)."')
-		");
+			WHERE domain IN ('".implode("', '", $wpdb->escape($domains))."')"
+		);
+
 		if ($results && count($results) > 0) {
 			foreach ($results as $data) {
 				$domain_ids[$data->domain] = $data->id;
@@ -323,11 +346,11 @@ class ak_link_harvest {
 	}
 	
 	function process_content($content, $post_id) {
+
 		$links = $this->get_links($content);
 		if ($links == false) {
 			return;
 		}
-		
 		aklh_log(sprintf(__('Found %s links in post id: %s.', 'link-harvest'), count($links), $post_id));
 
 		$domains = array();
@@ -350,23 +373,15 @@ class ak_link_harvest {
 				}
 				$domain = $this->get_domain($link);
 				if (!empty($domain)) {
-					$exclude_link = false;
-					foreach ($this->exclude as $exclude) {
-						if (!empty($exclude) && strstr($domain, $exclude)) {
-							$exclude_link = true;
-						}
+					if (isset($domain_count[$domain])) {
+						$domain_count[$domain]++;
 					}
-					if (!$exclude_link) {
-						if (isset($domain_count[$domain])) {
-							$domain_count[$domain]++;
-						}
-						else {
-							$domains[] = $domain;
-							$domain_count[$domain] = 1;
-						
-						}
-						$harvest[] = array($link, $domain);
+					else {
+						$domains[] = $domain;
+						$domain_count[$domain] = 1;
+					
 					}
+					$harvest[] = array($link, $domain);
 				}
 				aklh_log(sprintf(__('Processed link: %s', 'link-harvest'), $link));
 
@@ -392,27 +407,19 @@ class ak_link_harvest {
 	}
 	
 	function add_link($url, $domain_id, $post_id) {
-
 		aklh_log(sprintf(__('About to add link for post id: %s - %s', 'link-harvest'), $post_id, $url));
-
 		global $wpdb;
 		$title = stripslashes($this->get_page_title($url));
-		$result = $wpdb->query("
-			INSERT INTO $wpdb->ak_linkharvest
-			( post_id
-			, url
-			, title
-			, domain_id
-			, modified
+		$result = $wpdb->insert(
+			$wpdb->ak_linkharvest,
+			array(
+				'post_id' => $post_id,
+				'url' => $url,
+				'title' => $title,
+				'domain_id' => $domain_id,
+				'modified' => current_time('mysql', 1)
 			)
-			VALUES
-			( '".mysql_real_escape_string($post_id)."'
-			, '".mysql_real_escape_string($url)."'
-			, '".mysql_real_escape_string($title)."'
-			, '".mysql_real_escape_string($domain_id)."'
-			, '".current_time('mysql',1)."'
-			)
-		");
+		);
 		if (!$result) {
 			aklh_log(sprintf(__('Failed to add link for post id: %s - %s', 'link-harvest'), $post_id, $url));
 			return false;
@@ -426,18 +433,14 @@ class ak_link_harvest {
 	function add_domain($domain) {
 		global $wpdb;
 		$title = stripslashes($this->get_page_title('http://'.$domain));
-		$result = $wpdb->query("
-			INSERT INTO $wpdb->ak_domains
-			( domain
-			, title
-			, count
+		$result = $wpdb->insert(
+			$wpdb->ak_domains,
+			array(
+				'domain' => $domain,
+				'count' => '0',
+				'title' => $title
 			)
-			VALUES
-			( '".mysql_real_escape_string($domain)."'
-			, '".mysql_real_escape_string($title)."'
-			, '0'
-			)
-		");
+		);
 		if (!$result) {
 			aklh_log(sprintf(__('Failed to add domain: %s', 'link-harvest'), $domain));
 			return false;
@@ -451,17 +454,30 @@ class ak_link_harvest {
 	function set_domain_counter($domain = null, $domain_id = null, $count, $mod = '+') {
 		global $wpdb;
 		if (!is_null($domain)) {
-			$where = " WHERE domain = '".mysql_real_escape_string($domain)."' ";
+			$where = $wpdb->prepare("WHERE domain = %s", $domain);
 		}
 		else if (!is_null($domain_id)) {
-			$where = " WHERE id = '".intval($domain_id)."' ";
+			$where = $wpdb->prepare("WHERE id = %d", $domain_id);
 		}
 		if (isset($where)) {
-			$result = $wpdb->query("
+			$result = $wpdb->query( $wpdb->prepare("
 				UPDATE $wpdb->ak_domains
-				SET count = count $mod ".intval($count)."
+				SET count = count $mod %d
+				$where",
+				$count
+			));
+			$domain_count = $wpdb->get_var("
+				SELECT count 
+				FROM $wpdb->ak_domains
 				$where
 			");
+			if ($domain_count < 1) {
+				$wpdb->query("
+					DELETE 
+					FROM $wpdb->ak_domains
+					$where
+				");
+			}
 			if ($result != false) {
 				return true;
 			}
@@ -474,11 +490,12 @@ class ak_link_harvest {
 		if (is_array($post_ids) && count($post_ids) > 0) {
 			if ($delete_old) {
 				foreach ($post_ids as $post_id) {
-					$links = $wpdb->get_results("
+					$links = $wpdb->get_results( $wpdb->prepare("
 						SELECT *
 						FROM $wpdb->ak_linkharvest
-						WHERE post_id = $post_id
-					");
+						WHERE post_id = %d",
+						$post_id
+					));
 					if (count($links) > 0) {
 						$domains = array();
 						foreach ($links as $link) {
@@ -491,18 +508,15 @@ class ak_link_harvest {
 						}
 						if (count($domains) > 0) {
 							foreach ($domains as $id => $count) {
-								$update = $wpdb->query("
-									UPDATE $wpdb->ak_domains
-									SET count = count - $count
-									WHERE id = $id
-								");
+								$this->set_domain_counter(null, $id, $count, $mod = '-');
 							}
 						}
-						$delete = $wpdb->query("
+						$delete = $wpdb->query( $wpdb->prepare("
 							DELETE
 							FROM $wpdb->ak_linkharvest
-							WHERE post_id = $post_id
-						");
+							WHERE post_id = %d",
+							$post_id
+						));
 					}
 				}
 			}
@@ -513,7 +527,7 @@ class ak_link_harvest {
 					post_status = 'publish'
 					OR post_status = 'static'
 				)
-				AND ID IN (".implode(',', $post_ids).")
+				AND ID IN (".implode(',', $wpdb->escape($post_ids)).")
 			");
 		}
 		else {
@@ -525,18 +539,9 @@ class ak_link_harvest {
 			}
 			$post_types = aklh_public_post_types();
 			$pt_statement = '';
-			foreach ($post_types as $post_type) {
-				$pt_statement .= "post_type = '$post_type' OR ";
-			}
-			if (substr($pt_statement, -4) == ' OR ') {
-				$pt_statement = substr($pt_statement, 0, -4); 
-			} 
-			else {
-				return;
-			}
 			
-			error_log('PT ' . $pt_statement);
-			$posts = $wpdb->get_results("
+			$pt_statement = "AND post_type IN ('".implode('\', \'', $wpdb->escape($post_types))."') ";
+			$posts = $wpdb->get_results( $wpdb->prepare("
 				SELECT *
 				FROM $wpdb->posts
 				WHERE (
@@ -544,44 +549,51 @@ class ak_link_harvest {
 					OR post_status = 'static'
 				)
 				AND (
-					post_content LIKE '%http://%'
-					OR post_content LIKE '%https://%'
-				)
-				AND (
-					$pt_statement
-				)
+					post_content LIKE '%%http://%%'
+					OR post_content LIKE '%%https://%%'
+				) 
+				$pt_statement
 				ORDER BY ID
-				LIMIT $start, $limit
-			");
+				LIMIT %d, %d",
+				$start, $limit
+			));
+		}		
+
+		if (count($posts)) {
+			foreach ($posts as $post) {
+				if (function_exists('wp_is_post_revision') && wp_is_post_revision($post->ID)) {
+					continue;
+				}
+
+				aklh_log(sprintf(__('== Start processing post id: %s', 'link-harvest'), $post->ID));
+				$this->process_content($post->post_content, $post->ID);
+				$external = get_post_meta($post->ID, 'external_link', true);
+				if (!empty($external)) {
+					$this->process_content($external, $post->ID);
+				}
+				$via = get_post_meta($post->ID, 'via_link', true);
+				if (!empty($via)) {
+					$this->process_content($via, $post->ID);
+				}
+
+				aklh_log(sprintf(__("== Done processing post id: %s\n", 'link-harvest'), $post->ID));
+			}
 		}
-		foreach ($posts as $post) {
-			if (function_exists('wp_is_post_revision') && wp_is_post_revision($post->ID)) {
-				continue;
-			}
-
-			aklh_log(sprintf(__('== Start processing post id: %s', 'link-harvest'), $post->ID));
-
-			$this->process_content($post->post_content, $post->ID);
-			$external = get_post_meta($post->ID, 'external_link', true);
-			if (!empty($external)) {
-				$this->process_content($external, $post->ID);
-			}
-			$via = get_post_meta($post->ID, 'via_link', true);
-			if (!empty($via)) {
-				$this->process_content($via, $post->ID);
-			}
-
-			aklh_log(sprintf(__("== Done processing post id: %s\n", 'link-harvest'), $post->ID));
-		}
+	}
+	
+	function post_update($post_id) {
+		$this->harvest_posts(array($post_id), 0, null, true);
+		
 	}
 	
 	function post_delete($post_id) {
 		global $wpdb;
-		$links = $wpdb->get_results("
+		$links = $wpdb->get_results( $wpdb->prepare("
 			SELECT *
 			FROM $wpdb->ak_linkharvest
-			WHERE post_id = '$post_id'
-		");
+			WHERE post_id = %d",
+			$post_id
+		));
 		$urls = array();
 		foreach ($links as $link) {
 			$urls[] = $link->url;
@@ -590,16 +602,12 @@ class ak_link_harvest {
 		foreach ($domains as $domain => $count) {
 			$this->set_domain_counter($domain, null, $count, $mod = '-');
 		}
-		$wpdb->query("
+		$wpdb->get_results( $wpdb->prepare("
 			DELETE
 			FROM $wpdb->ak_linkharvest
-			WHERE post_id = '$post_id'
-		");
-	}
-	
-	function post_update($post_id) {
-		$this->post_delete($post_id);
-		$this->harvest_posts(array($post_id));
+			WHERE post_id = %d",
+			$post_id
+		));
 	}
 	
 	function domain_counts($links) {
@@ -632,9 +640,7 @@ class ak_link_harvest {
 	function get_page_title($url) {
 // getting web page title code found here
 // http://www.drquincy.com/resources/tutorials/webserverside/getremotewebpageinfo/#complete
-
 		$title = '';
-
 		require_once(ABSPATH.WPINC.'/class-snoopy.php');
 		$snoop = new Snoopy;
 		$snoop->maxlength = 2000;
@@ -657,6 +663,10 @@ class ak_link_harvest {
 
 		return $title;
 	}
+	function sql_domain_exclude() {
+		global $wpdb;
+		return "WHERE domain NOT IN ('".implode('\', \'', $wpdb->escape($this->exclude))."') ";
+	}
 	
 	function show_harvest($limit = 50, $type = 'table') {
 		global $wpdb;
@@ -668,12 +678,15 @@ class ak_link_harvest {
 				$pagenum = isset($_GET['paged']) ? absint($_GET['paged']) : 0;
 				if (empty($pagenum)) $pagenum = 1;
 				$offset = ($pagenum - 1) * $per_page;
-				$domains = $wpdb->get_results("
+				$domain_excludes = $this->sql_domain_exclude();
+				$domains = $wpdb->get_results( $wpdb->prepare("
 					SELECT SQL_CALC_FOUND_ROWS *
 					FROM $wpdb->ak_domains
+					$domain_excludes
 					ORDER BY count DESC
-					LIMIT $offset, $per_page
-				");
+					LIMIT %d, %d",
+					$offset, $per_page
+				));
 				$overall_count = $wpdb->get_var("SELECT FOUND_ROWS()");
 				if ($overall_count > 0) {
 					$num_pages = ceil($overall_count / $per_page);
@@ -687,7 +700,7 @@ class ak_link_harvest {
 					));
 					if ($page_links) {
 						echo '<div class="tablenav"><div class="tablenav-pages">';
-						$page_links_text = sprintf('<span class="displaying-num">'.__('Displaying %s&#8211;%s of %s', '404-notifier').'</span>%s',
+						$page_links_text = sprintf('<span class="displaying-num">'.__('Displaying %s&#8211;%s of %s', 'link0harvest').'</span>%s',
 							number_format_i18n(($pagenum-1) * $per_page+1),
 							number_format_i18n(min($pagenum * $per_page, $overall_count)),
 							number_format_i18n($overall_count),
@@ -696,15 +709,18 @@ class ak_link_harvest {
 						echo $page_links_text.'</div><div class="clear"></div></div>';
 					}
 				}
-				echo '<table class="widefat post">';
+				echo '<table class="widefat post aklh_harvest">';
 			}
 			else {
-				$domains = $wpdb->get_results("
+				$domain_excludes = $this->sql_domain_exclude();
+				$domains = $wpdb->get_results( $wpdb->prepare("
 					SELECT *
 					FROM $wpdb->ak_domains
+					$domain_excludes
 					ORDER BY count DESC
-					LIMIT $limit
-				");
+					LIMIT %d", 
+					$limit
+				));
 				echo '<table class="aklh_harvest">';
 			}
 				echo('
@@ -719,8 +735,8 @@ class ak_link_harvest {
 	<tbody>
 				');
 				if (count($domains) == 0) {
-					print('
-		<tr><td colspan="4">'.__('No links harvested yet. (<a href="'.get_bloginfo('wpurl').'/wp-admin/options-general.php?ak_action=harvest">Start Harvesting</a>)', 'link-harvest').'</td></tr>
+					echo ('
+		<tr><td colspan="4">'.sprintf(__('No links harvested yet. (<a href="%s">Start Harvesting</a>)', 'link-harvest'), admin_url('options-general.php?ak_action=harvest')).'</td></tr>
 					');
 				}
 				else {
@@ -737,161 +753,237 @@ class ak_link_harvest {
 						else {
 							$class = '';
 						}
-						print('
-		<tr id="aklh_table_row_'.$domain->id.'"'.$class.'>
-			<td><a href="http://'.$domain->domain.'">'.$title.'</a><div id="domain_'.$domain->id.'"></div></td>
-			<td class="count">'.htmlspecialchars($domain->count).'</td>
-			<td class="action"><a href="javascript:void(aklh_show_for_domain(\''.$domain->id.'\', \'links\'));">'.__('Show Links', 'link-harvest').'</td>
-			<td class="action"><a href="javascript:void(aklh_show_for_domain(\''.$domain->id.'\', \'posts\'));">'.__('Show Posts', 'link-harvest').'</td>
+						echo ('
+		<tr id="'.esc_attr('aklh_table_row_'.$domain->id).'"'.$class.'>
+			<td><a href="'.esc_url('http://'.$domain->domain).'">'.esc_html($title).'</a>
+				<div id="'.esc_attr('domain_'.$domain->id).'">
+					<div class="'.esc_attr('aklh-links-list-'.$domain->id).'" style="display:none;"></div>
+					<div class="'.esc_attr('aklh-posts-list-'.$domain->id).'" style="display:none;"></div>
+				</div>
+			</td>
+			<td class="count">'.esc_html($domain->count).'</td>
+			<td class="action"><a href="javascript:void(aklh_show_for_domain(\''.esc_js($domain->id).'\', \'links\'));">'.__('Show Links', 'link-harvest').'</td>
+			<td class="action"><a href="javascript:void(aklh_show_for_domain(\''.esc_js($domain->id).'\', \'posts\'));">'.__('Show Posts', 'link-harvest').'</td>
 		</tr>
 						');
 						$i++;
 					}
 				}
-				print('
+				echo ('
 	</tbody>
 </table>
 				');
 				break;
 			case 'list':
-				$items = array();
-				foreach ($domains as $domain) {
-					if (!empty($domain->title)) {
-						$title = htmlspecialchars($domain->title).' ('.$domain->domain.')';
+				$domain_excludes = $this->sql_domain_exclude();
+				$domains = $wpdb->get_results( $wpdb->prepare("
+					SELECT *
+					FROM $wpdb->ak_domains
+					$domain_excludes
+					ORDER BY count DESC
+					LIMIT %d",
+					$limit
+				));
+				if (count($domains)) {
+					$items = array();
+					foreach ($domains as $domain) {						
+						if (!empty($domain->title)) {
+							$title = esc_html($domain->title).' ('.$domain->domain.')';
+						}
+						else {
+							$title = '('.$domain->domain.')';
+						}
+						$items[$domain->title]['id'] = $domain->id;
+						$items[$domain->title]['url'] = 'http://'.$domain->domain;
+						$items[$domain->title]['count'] = $domain->count;
+						$items[$domain->title]['title'] = $domain->title.' ('.$domain->domain.')';
 					}
-					else {
-						$title = '('.$domain->domain.')';
-					}
-					$items['http://'.$domain->domain] = $title;
+					echo ('
+	<h3>'.__('List of External Links', 'link-harvest').':</h3>
+	<ul class="aklh_harvest">'.$this->get_list_nodes($items).'</ul>
+					');
 				}
-				print('
-<ol class="aklh_harvest">'.$this->get_list_nodes($items).'</ol>
-				');
-				break;
+				else {
+					__e('No Links have been Harvested', 'link-harvest');
+				}
+					break;
 		}
 	}
-	
 	function get_list_nodes($items) {
+		global $wpdb;
 		$output = '';
-		foreach ($items as $url => $title) {
-			$output .= '<li><a href="'.$url.'">'.$title.'</a></li>'."\n";
+		foreach ($items as $item) {
+			$count_markup ='';
+			if (get_option('aklh_show_num_links')) {
+				$count_markup = '('.esc_html($item['count']).') ';
+			}
+			$output .= '<li>'.$count_markup.'<a href="'.esc_url($item['url']).'"'.$data.'>'.esc_html($item['title']).'</a></li>'."\n";
 		}
 		return $output;
 	}
 	
-	function options_form() {
-		switch ($this->harvest_enabled) {
-			case '1':
-				$enabled = ' checked="checked"';
-				$disabled = '';
-				break;
-			case '0':
-				$enabled = '';
-				$disabled = ' checked="checked"';
-				break;
-		}
-		if (get_option('aklh_token') == '0') {
-			$token_options = '<option value="1">'.__('Yes', 'link-harvest').'</option><option value="0" selected="selected">'.__('No', 'link-harvest').'</option>';
+	function get_list_nodes_posts($domain_id) {
+		global $wpdb;
+		$posts = $wpdb->get_results( $wpdb->prepare("
+			SELECT p.*
+			FROM $wpdb->posts p
+			LEFT JOIN $wpdb->ak_linkharvest lh
+			ON p.ID = lh.post_id
+			WHERE lh.domain_id = %s
+			AND (
+				post_status = 'publish'
+				OR post_status = 'static'
+			)
+			GROUP BY p.ID
+			ORDER BY p.post_date DESC",
+			$domain_id
+		));
+			
+		$output .= '';
+		if (count($posts) > 0) {
+			global $post;
+			foreach ($posts as $post) {
+				if (get_the_title($post->ID) == '') {
+					$title = get_permalink($post->ID);
+				}
+				else {
+					$title = get_the_title($post->ID);
+				}
+				$output .= '<li><a href="'.get_permalink($post->ID).'">'.esc_html($title).'</a> ('.get_the_time('Y-m-d').')</li>';
+			}
 		}
 		else {
-			$token_options = '<option value="1" selected="selected">'.__('Yes', 'link-harvest').'</option><option value="0">'.__('No', 'link-harvest').'</option>';
+			$output .= '<li>'.__('(none found)', 'link-harvest').'</li>';
 		}
 		
-		echo '<div class="wrap">';
-		CF_Admin::cf_admin_header(__('Link Harvest Options', 'link-harvest'), 'Link Harvest', AKLH_VERSION);
-		echo '<div id="cf">';
-		CF_Admin::cf_admin_tabs(array(__('Options', 'link-harvest'), __('Harvest Links', 'link-harvest'), __('Usage', 'link-harvest') ));
-		echo('	
-				<div id="cf-tab-content-1">
-					<form name="ak_linkharvest" action="'.esc_url(admin_url('options-general.php')).'" method="post" class="cf-form">
-						<fieldset class="cf-lbl-pos-left">
-						<legend>Domains</legend>
-						<p>'.__('You may want to exclude certain domains from your harvested links. For example, you may have a number of links to pages/posts on your own site and including your own links in the harvest will make your own site appear in your <a href="index.php?page=link-harvest.php">links list</a>.', 'link-harvest').'</p>
-							<div class="cf-elm-block cf-elm-width-500">
-								<label for="exclude">'.__('Domains to exclude', 'link-harvest').'</label>
-								<textarea name="exclude" class="cf-elm-textarea" id="exclude">'.htmlspecialchars(implode(' ', $this->exclude)).'</textarea>
-								<span class="cf-elm-help cf-elm-align-bottom">'.__('(separated by spaces, example: <code>example.com','link-harvest').' '.$this->get_domain(get_bloginfo('home')).' google.com</code></span>
-							</div>
-							<div class="cf-elm-block cf-elm-width-50">
-								<label class="cf-lbl-text" for="table_length">'.__('Number of domains to show:', 'link-harvest').'</label>
-								<input class="cf-elm-text" type="text" size="5" name="table_length" id="table_length" value="'.$this->table_length.'" />
-							</div>
-							</fieldset>
-							<fieldset class="cf-lbl-pos-left">
-							<legend>Harvest Actions</legend>
-							<p>'.__('Once the initial link harvest is complete, it is a good idea to disable link harvesting as it can be resource intensive for your server. This is done for you automatically after a successful harvest, but you can manually control it here.', 'link-harvest').'</p>
-							<div class="cf-elm-block cf-has-radio">
-							<p class="cf-lbl-radio-group"> Link Harvest Actions</p>
-							<ul>
-								<li><input class="cf-elm-radio" type="radio" name="harvest_enabled" value="1" id="harvest_enabled_y" '.$enabled.'/> <label class="cf-lbl-radio" for="harvest_enabled_y"><strong>Enable</strong></label>
-								</li>
-								<li><input class="cf-elm-radio" type="radio" name="harvest_enabled" value="0" id="harvest_enabled_n" '.$disabled.'/> <label class="cf-lbl-radio" for="harvest_enabled_n"><strong>Disable</strong></label>
-								</li>
-							</ul>	
-							</div>						
-							</fieldset>
-							<fieldset class="cf-lbl-pos-left">
-							<legend>Token Method</legend>
-							<p>'.__('The token method has been deprecated as of version 1.3, please use shortcodes when displaying your links list on a page or post', 'link-harves').'</p> 
-							<div class="cf-elm-block cf-elm-width-300">
-								<label class="cf-lbl-select" for="aklh_token">'.__('Enable token method', 'link-harvest').'</label>
-								<select class="cf-elm-select" name="token" id="aklh_token">'.$token_options.'</select>
-							</div>
-							<input type="hidden" name="ak_action" value="update_linkharvest_settings" />
-						</fieldset>'
-						.wp_nonce_field('link-harvest' , 'link-harvest-settings-nonce', true, false).wp_referer_field(false).
-						'<p class="submit">
-							<input class="button-primary" type="submit" name="submit" value="'.__('Save Changes', 'link-harvest').'" />
-						</p>
-					</form>
-				</div>
-				<div id="cf-tab-content-2" class="cf-hidden">
-					<form class="cf-form">
-						<fieldset>
-							<p>'.__('When you are ready to harvest (or re-harvest) your links, press this button', 'link-harvest').'</p>
-							<p class="submit">
-								<input type="button" name="recount" value="'.__('(Re) Harvest All Links', 'link-harvest').'" onclick="if (jQuery(\'#harvest_enabled_y:checked\').size()) { location.href=\''.admin_url('options-general.php?ak_action=harvest').'\'; } else { alert(\''.__('Please enable link harvesting, save your settings, then try again.', 'link-harvest').'\'); }" />
-							</p>					
-						</fieldset>
-					</form>
-					<h3>'.__('Backfill Empty Titles', 'link-harvest').'</h3>
-					<p>'.__('If a few domains or pages did not get proper titles the first time around, you can try filling them in here.', 'link-harvest').'</p>
-					<ul style="margin-bottom: 40px;">
-						<li><a href="'.esc_url(admin_url('options-general.php?ak_action=backfill_domains')).'">'.__('Backfill empty domain titles', 'link-harvest').'</a></li>
-						<li><a href="'.esc_url(admin_url('options-general.php?ak_action=backfill_pages')).'">'.__('Backfill empty page titles', 'link-harvest').'</a></li>
-					</ul>
-				</div>
-				<div id="cf-tab-content-3" class="cf-hidden">
-					<div id="aklh_template_tags">
-						<h3>'.__('Shortcode', 'link-harvest').'</h3>
-						<p>'.__('Use the shortcode <code>[linkharvest]</code> on any post or page to display links list on that post or page.</p><p> To set the limit of links to display, add the limit parameter: <code>[linkharvest limit=&quot;10&quot;]</code>.</p><p> To display the link lists in a table format instead of a list format, add the type parameter: <code>[linkharvest limit=&quot;10&quot; type=&quot;table&quot;]</code>','link-harvest').'</p>
-						<h3>'.__('Token Method', 'link-harvest').'</h3>
-						<p>'.__('The token method has been deprecated as of version 1.3. Please use the the shortcode above instead of the <strong>###linkharvest###</strong> token method.', 'link-harvest').'</p>
-						<h3>'.__('Template Tag Method', 'link-harvest').'</h3>
-						<p>'.__('You can always add a template tag to your theme (in a page template perhaps) to show your links list.', 'link-harvest').'</p>
-						<dl>
-							<dt><code>aklh_show_harvest($limit = 10, $type = &quot;table&quot; or &quot;list&quot;)</code></dt>
-							<dd>
-								<p>'.__('Put this tag outside of <a href="http://codex.wordpress.org/The_Loop">The Loop</a> (perhaps in your sidebar?) to show a list (like the archives/categories/links list) of the sites you link to most. All arguments are optional, the defaults are included in the example above.', 'link-harvest').'</p>
-								<p>Examples:</p> 
-								<ul>
-									<li><code>&lt;?php aklh_show_harvest(50); ?> (table)</code></li>
-									<li><code>
-										&lt;li>&lt;h2>Links&lt;/h2><br />
-										&nbsp;&nbsp;	&lt;?php aklh_top_links(10); ?> (list)<br />
-										&lt;/li>
-									</code></li>
-								</ul>
-							</dd>
-						</dl>
-					</div> <!-- #aklh_template_tags -->
-				</div>');
-				
-				CF_Admin::cf_callouts();
-				echo ('	
-				</div> <!-- #cf -->
-			</div> <!-- .wrap -->
+		return $output;
+	}
+	
+	function options_form() {
+		$token_options = '
+			<option value="1" '.selected($this->token, '1', false).'>'.__('Yes', 'link-harvest').'</option>
+			<option value="0" '.selected($this->token, '0', false).'>'.__('No', 'link-harvest').'</option>	
+		';
+		$credit_options = '
+			<option value="1" '.selected($this->credit, '1', false).'>'.__('Yes', 'link-harvest').'</option>
+			<option value="0" '.selected($this->credit, '0', false).'>'.__('No', 'link-harvest').'</option>
+		';
+		$show_num_options = '
+			<option value="1" '.selected($this->show_num_links, '1', false).'>'.__('Yes', 'link-harvest').'</option>
+			<option value="0" '.selected($this->show_num_links, '0', false).'>'.__('No', 'link-harvest').'</option>
+		';
+		
+		echo('
+<div id="cf" class="wrap">
+	<div id="cf-header">	
 		');
+		CF_Admin::admin_header(__('Link Harvest Options', 'link-harvest'), 'Link Harvest', AKLH_VERSION, 'link-harvest');
+		CF_Admin::admin_tabs(array(__('Options', 'link-harvest'), __('Harvest Links', 'link-harvest'), __('Usage', 'link-harvest') ));
+
+		echo('
+	</div>
+	
+	<div class="cf-tab-content-1 cf-content cf-hidden">
+		<form name="ak_linkharvest" action="'.admin_url('options-general.php').'" method="post" class="cf-form">
+			<fieldset class="cf-lbl-pos-left">
+			<legend>Domains</legend>
+			<p>'.__('You may want to exclude certain domains from your harvested links. For example, you may have a number of links to pages/posts on your own site and including your own links in the harvest will make your own site appear in your <a href="index.php?page=link-harvest.php">links list</a>.', 'link-harvest').'</p>
+				<div class="cf-elm-block cf-elm-width-500">
+					<label for="exclude">'.__('Domains to exclude', 'link-harvest').'</label>
+					<textarea name="exclude" class="cf-elm-textarea" id="exclude">'.htmlspecialchars(implode(' ', $this->exclude)).'</textarea>
+					<span class="cf-elm-help cf-elm-align-bottom">'.__('(separated by spaces, example: <code>example.com','link-harvest').' '.$this->get_domain(get_bloginfo('home')).' google.com</code></span>
+				</div>
+				<div class="cf-elm-block cf-elm-width-50">
+					<label class="cf-lbl-text" for="table_length">'.__('Number of domains to show:', 'link-harvest').'</label>
+					<input class="cf-elm-text" type="text" size="5" name="table_length" id="table_length" value="'.esc_html($this->table_length).'" />
+				</div>
+				</fieldset>
+				<fieldset class="cf-lbl-pos-left">
+				<legend>Harvest Actions</legend>
+				<p>'.__('Once the initial link harvest is complete, it is a good idea to disable link harvesting as it can be resource intensive for your server. This is done for you automatically after a successful harvest, but you can manually control it here.', 'link-harvest').'</p>
+				<div class="cf-elm-block cf-has-radio">
+				<p class="cf-lbl-radio-group"> Link Harvest Actions</p>
+				<ul>
+					<li><input class="cf-elm-radio" type="radio" name="harvest_enabled" value="1" id="harvest_enabled_y" '.checked($this->harvest_enabled, '1', false).'/> <label class="cf-lbl-radio" for="harvest_enabled_y"><strong>Enable</strong></label>
+					</li>
+					<li><input class="cf-elm-radio" type="radio" name="harvest_enabled" value="0" id="harvest_enabled_n" '.checked($this->harvest_enabled, '0', false).'/> <label class="cf-lbl-radio" for="harvest_enabled_n"><strong>Disable</strong></label>
+					</li>
+				</ul>	
+				</div>						
+				</fieldset>
+				<fieldset class="cf-lbl-pos-left">
+					<legend>Link Count Display</legend>
+					<p>'.__('Display the number of times a specific URL has been used in the Link List table', 'link-harvest').'</p> 
+					<div class="cf-elm-block cf-elm-width-300">
+						<label class="cf-lbl-select" for="aklh_show_num_links">'.__('Show number of links', 'link-harvest').'</label>
+						<select class="cf-elm-select" name="show_num_links" id="aklh_show_num_links">'.$show_num_options.'</select>
+					</div>
+				</fieldset>
+				<fieldset class="cf-lbl-pos-left">
+					<legend>Credit</legend>
+					<p>'.__('This displays a link harvest plugin link below your link list', 'link-harvest').'</p> 
+					<div class="cf-elm-block cf-elm-width-300">
+						<label class="cf-lbl-select" for="aklh_credit">'.__('Display credit link', 'link-harvest').'</label>
+						<select class="cf-elm-select" name="credit" id="aklh_credit">'.$credit_options.'</select>
+					</div>
+				</fieldset>
+				<fieldset class="cf-lbl-pos-left">
+				<legend>Token Method</legend>
+				<p>'.__('The token method has been deprecated as of version 1.3, please use shortcodes when displaying your links list on a page or post', 'link-harvest').'</p> 
+				<div class="cf-elm-block cf-elm-width-300">
+					<label class="cf-lbl-select" for="aklh_token">'.__('Enable token method', 'link-harvest').'</label>
+					<select class="cf-elm-select" name="token" id="aklh_token">'.$token_options.'</select>
+				</div>
+				<input type="hidden" name="ak_action" value="update_linkharvest_settings" />
+			</fieldset>'
+			.wp_nonce_field('link-harvest' , 'link-harvest-settings-nonce', true, false).wp_referer_field(false).
+			'<p class="submit">
+				<input class="button-primary" type="submit" name="submit" value="'.__('Save Changes', 'link-harvest').'" />
+			</p>
+		</form>
+	</div>
+	
+	<div class="cf-tab-content-2 cf-content cf-hidden">
+		<form class="cf-form">
+			<fieldset>
+				<p>'.__('When you are ready to harvest (or re-harvest) your links, press this button', 'link-harvest').'</p>
+				<p class="submit">
+					<input type="button" name="recount" value="'.__('(Re) Harvest All Links', 'link-harvest').'" onclick="if (jQuery(\'#harvest_enabled_y:checked\').size()) { location.href=\''.admin_url('options-general.php?ak_action=harvest').'\'; } else { alert(\''.__('Please enable link harvesting, save your settings, then try again.', 'link-harvest').'\'); }" />
+				</p>					
+			</fieldset>
+		</form>
+		<h3>'.__('Backfill Empty Titles', 'link-harvest').'</h3>
+		<p>'.__('If a few domains or pages did not get proper titles the first time around, you can try filling them in here.', 'link-harvest').'</p>
+		<ul style="margin-bottom: 40px;">
+			<li><a href="'.admin_url('options-general.php?ak_action=backfill_domains').'">'.__('Backfill empty domain titles', 'link-harvest').'</a></li>
+			<li><a href="'.admin_url('options-general.php?ak_action=backfill_pages').'">'.__('Backfill empty page titles', 'link-harvest').'</a></li>
+		</ul>
+	</div>
+	
+	<div class="cf-tab-content-3 cf-content cf-hidden">
+		<div id="aklh_template_tags">
+			<h3>'.__('Shortcode', 'link-harvest').'</h3>
+			<p>'.__('Use the shortcode <code>[linkharvest]</code> on any post or page to display links list on that post or page.</p><p> To set the limit of links to display, add the limit parameter: <code>[linkharvest limit=&quot;10&quot;]</code>.</p><p> To display the link lists in a table format instead of a list format, add the type parameter: <code>[linkharvest limit=&quot;10&quot; type=&quot;table&quot;]</code>','link-harvest').'</p>
+			<h3>'.__('Template Tag Method', 'link-harvest').'</h3>
+			<p>'.__('You can always add a template tag to your theme (in a page template perhaps) to show your links list.', 'link-harvest').'</p>
+			<dl>
+				<dt><code>aklh_show_harvest($limit = 10, $type = &quot;table&quot; or &quot;list&quot;)</code></dt>
+				<dd>
+					<p>'.__('Put this tag outside of <a href="http://codex.wordpress.org/The_Loop">The Loop</a> (perhaps in your sidebar?) to show a list (like the archives/categories/links list) of the sites you link to most. All arguments are optional, the defaults are included in the example above.', 'link-harvest').'</p>
+					<p>Examples:</p> 
+					<ul>
+						<li><code>&lt;?php aklh_show_harvest(50); ?></code></li>
+						<li><code>&lt;?php aklh_show_harvest(50, \'list\'); ?></code></li>
+					</ul>
+				</dd>
+			</dl>
+		</div> <!-- #aklh_template_tags -->
+	</div> <!-- # -->
+</div> <!--#cf-->
+	');
+	
+	CF_Admin::callouts('link-harvest');
+
 	}
 	
 	function show_processing_page($type) {
@@ -906,10 +998,13 @@ class ak_link_harvest {
 						post_status = 'publish'
 						OR post_status = 'static'
 					)
-					AND post_content LIKE '%http://%'
+					AND (
+						post_content LIKE '%http://%'
+						OR post_content LIKE '%https://%'
+						)
 				");
 				$js = '
-	var count = '.$count.';
+	var count = '.esc_js($count).';
 	function harvest_links(start, limit) {
 		jQuery("#submit").hide();
 		jQuery("#progress, #cancel").show();
@@ -931,7 +1026,7 @@ class ak_link_harvest {
 		}
 		var processed_count = parseInt(progress);
 		if (processed_count > 0 && processed_count < count) {
-			harvest_links(processed_count, '.$this->default_limit.');
+			harvest_links(processed_count, '.esc_js($this->default_limit).');
 		}
 		else if (processed_count >= count) {
 			jQuery("#progress, #cancel").hide();
@@ -952,24 +1047,24 @@ class ak_link_harvest {
 				';
 				if ($count == 0) {
 					$body .= '
-		<p>'.__('Oops, didn\'t find any links to harvest.', 'link-harvest').'</p>
+		<p>'.sprintf(__('Oops, didn\'t find any links to harvest. Go <a href="%s">back</a> to the settings page.', 'link-harvest'), admin_url('options-general.php?page=link-harvest.php')).'</p>
 					';
 				}
 				else {
 					$body .= '
-		<p>'.__('Harvesting links from your posts and pages can take a little while. Once you click the <strong>Start Link Harvest</strong> button below, all of your posts and pages will be scanned for links and those links will be pulled out and stored in the Link Harvest database so we can do cool things with them for you.', 'link-harvest').'</p>
-		<p>'.__('Note: This is a one time step, future posts and pages will be added to the Link Harvest as you create them (and removed if you delete them).', 'link-harvest').'</p>
-		<p id="progress" class="center">'.__('Processed: ', 'link-harvest').'<strong><span id="count">0</span> / '.$count.'</strong> '.__('posts and pages.', 'link-harvest').'</p>
+		<p>'.__('Harvesting links from your posts (including pages and custom post types) can take a little while. Once you click the <strong>Start Link Harvest</strong> button below, all of your posts will be scanned for links and those links will be pulled out and stored in the Link Harvest database so we can do cool things with them for you.', 'link-harvest').'</p>
+		<p>'.__('Note: This is a one time step, future posts will be added to the Link Harvest as you create them (and removed if you delete them).', 'link-harvest').'</p>
+		<p id="progress" class="center">'.__('Processed: ', 'link-harvest').'<strong><span id="count">0</span> / '.esc_html($count).'</strong> '.__('posts.', 'link-harvest').'</p>
 		<form action="#" method="get" onsubmit="return false;">
 			<fieldset>
 				<legend>'.__('Harvest Links', 'link-harvest').'</legend>
-				<p id="submit" class="center"><input type="button" name="harvest_button" value="'.__('Start Link Harvest', 'link-harvest').'" onclick="harvest_links(0, '.$this->default_limit.'); return false;" /></p>
+				<p id="submit" class="center"><input type="button" name="harvest_button" value="'.__('Start Link Harvest', 'link-harvest').'" onclick="harvest_links(0, '.esc_js($this->default_limit).'); return false;" /></p>
 				<p id="cancel" class="center"><input type="button" name="cancel_button" value="'.__('Cancel', 'link-harvest').'" onclick="location.href=\''.admin_url('options-general.php?page=link-harvest.php').'\';" />
 			</fieldset>
 		</form>
-		<p id="complete" class="center">'.__('The link harvest has completed successfully. View your <a href="'.esc_url(admin_url('index.php?page=link-harvest.php')).'">links list</a>.', 'link-harvest').'</p>
-		<p id="error" class="center">'.__('The link harvest failed, make sure you have harvesting enabled in your <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">options</a>.', 'link-harvest').'</p>
-		<p class="center"><a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">'.__('Back to WordPress Admin', 'link-harvest').'</a></p>
+		<p id="complete" class="center">'.__('The link harvest has completed successfully. View your <a href="'.admin_url('index.php?page=link-harvest.php').'">links list</a>.', 'link-harvest').'</p>
+		<p id="error" class="center">'.__('The link harvest failed, make sure you have harvesting enabled in your <a href="'.admin_url('options-general.php?page=link-harvest.php').'">options</a>.', 'link-harvest').'</p>
+		<p class="center"><a href="'.admin_url('options-general.php?page=link-harvest.php').'">'.__('Back to WordPress Admin', 'link-harvest').'</a></p>
 					';
 				}
 				break;
@@ -1028,8 +1123,8 @@ class ak_link_harvest {
 				}
 				else {
 					$body .= '
-		<p>'.sprintf(__('Sometimes a web page can be slow to load (for whatever reason). This will go through the <strong>%s</strong> domain(s) that have empty titles and try to fill them in for you.', 'link-harvest'), $count).'</p>
-		<p id="progress" class="center">'.__('Processed: ', 'link-harvest').'<strong><span id="count">0</span> / '.$count.'</strong> '.__('empty domain titles.', 'link-harvest').'</p>
+		<p>'.sprintf(__('Sometimes a web page can be slow to load (for whatever reason). This will go through the <strong>%s</strong> domain(s) that have empty titles and try to fill them in for you.', 'link-harvest'), esc_html($count)).'</p>
+		<p id="progress" class="center">'.__('Processed: ', 'link-harvest').'<strong><span id="count">0</span> / '.esc_html($count).'</strong> '.__('empty domain titles.', 'link-harvest').'</p>
 		<p id="last">0</p>
 		<form action="#" method="get" onsubmit="return false;">
 			<fieldset>
@@ -1038,12 +1133,12 @@ class ak_link_harvest {
 				<p id="cancel" class="center"><input type="button" name="cancel_button" value="'.__('Cancel', 'link-harvest').'" onclick="location.href=\''.admin_url('options-general.php?page=link-harvest.php').'\';" />
 			</fieldset>
 		</form>
-		<p id="complete" class="center">'.__('The domain title backfill has completed successfully. View your <a href="'.esc_url(admin_url('index.php?page=link-harvest.php')).'">updated links list</a>.', 'link-harvest').'</p>
-		<p id="error" class="center">'.__('The domain title backfill failed, make sure you have harvest actions enabled in your <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">options</a>.', 'link-harvest').'</p>
+		<p id="complete" class="center">'.__('The domain title backfill has completed successfully. View your <a href="'.admin_url('index.php?page=link-harvest.php').'">updated links list</a>.', 'link-harvest').'</p>
+		<p id="error" class="center">'.__('The domain title backfill failed, make sure you have harvest actions enabled in your <a href="'.admin_url('options-general.php?page=link-harvest.php').'">options</a>.', 'link-harvest').'</p>
 					';
 				}
 				$body .= '
-		<p class="center"><a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">'.__('Back to WordPress Admin', 'link-harvest').'</a></p>
+		<p class="center"><a href="'.admin_url('options-general.php?page=link-harvest.php').'">'.__('Back to WordPress Admin', 'link-harvest').'</a></p>
 				';
 				break;
 
@@ -1099,8 +1194,8 @@ class ak_link_harvest {
 				}
 				else {
 					$body .= '
-		<p>'.sprintf(__('Sometimes a web page can be slow to load (for whatever reason). This will go through the <strong>%s</strong> page(s) that have empty titles and try to fill them in for you.', 'link-harvest'), $count).'</p>
-		<p id="progress" class="center">'.__('Processed: ', 'link-harvest').'<strong><span id="count">0</span> / '.$count.'</strong> '.__('empty page titles.', 'link-harvest').'</p>
+		<p>'.sprintf(__('Sometimes a web page can be slow to load (for whatever reason). This will go through the <strong>%s</strong> page(s) that have empty titles and try to fill them in for you.', 'link-harvest'), esc_html($count)).'</p>
+		<p id="progress" class="center">'.__('Processed: ', 'link-harvest').'<strong><span id="count">0</span> / '.esc_html($count).'</strong> '.__('empty page titles.', 'link-harvest').'</p>
 		<p id="last">0</p>
 		<form action="#" method="get" onsubmit="return false;">
 			<fieldset>
@@ -1109,30 +1204,30 @@ class ak_link_harvest {
 				<p id="cancel" class="center"><input type="button" name="cancel_button" value="'.__('Cancel', 'link-harvest').'" onclick="location.href=\''.admin_url('options-general.php?page=link-harvest.php').'\';" />
 			</fieldset>
 		</form>
-		<p id="complete" class="center">'.__('The page title backfill has completed successfully. View your <a href="'.esc_url(admin_url('index.php?page=link-harvest.php')).'">updated links list</a>.', 'link-harvest').'</p>
-		<p id="error" class="center">'.__('The page title backfill failed, make sure you have harvest actions enabled in your <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">options</a>.', 'link-harvest').'</p>
+		<p id="complete" class="center">'.__('The page title backfill has completed successfully. View your <a href="'.admin_url('index.php?page=link-harvest.php').'">updated links list</a>.', 'link-harvest').'</p>
+		<p id="error" class="center">'.__('The page title backfill failed, make sure you have harvest actions enabled in your <a href="'.admin_url('options-general.php?page=link-harvest.php').'">options</a>.', 'link-harvest').'</p>
 					';
 				}
 				$body .= '
-		<p class="center"><a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">'.__('Back to WordPress Admin', 'link-harvest').'</a></p>
+		<p class="center"><a href="'.admin_url('options-general.php?page=link-harvest.php').'">'.__('Back to WordPress Admin', 'link-harvest').'</a></p>
 				';
 				break;
 		}
 		if (!$this->harvest_enabled) {
 			$body = '
 				<h1>'.__('Link Harvest', 'link-harvest').'</h1>
-				<p>'.__('Oops, harvest actions aren\'t enabled. Turn them on <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">in your options</a>', 'link-harvest').'</p>
+				<p>'.__('Oops, harvest actions aren\'t enabled. Turn them on <a href="'.admin_url('options-general.php?page=link-harvest.php').'">in your options</a>', 'link-harvest').'</p>
 			';
 		}
 		header("Content-type: text/html");
-		print('
+		echo ('
 <?xml version="1.0"?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
         "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 	<title>'.__('Link Harvest', 'link-harvest').'</title>
-	<script src="'.esc_url(includes_url('js/jquery/jquery.js')).'" type="text/javascript"></script>
+	<script src="'.includes_url('js/jquery/jquery.js').'" type="text/javascript"></script>
 	<script type="text/javascript">
 	'.$js.'
 	</script>
@@ -1213,12 +1308,10 @@ class ak_link_harvest {
 }
 
 function aklh_public_post_types() {
-	$args=array(
-	  'public'   => true,
+	$args = array(
+	  'public' => true,
 	);
-
-	$output = 'names'; // names or objects
-	return get_post_types($args,$output);
+	return get_post_types($args, 'names');
 }
 
 // -- HOOKABLE FUNCTIONS
@@ -1232,18 +1325,17 @@ function aklh_publish($post) {
 		return;
 	}
 }
+add_action('new_to_publish', 'aklh_publish', 999);
+add_action('draft_to_publish', 'aklh_publish', 999);
+add_action('pending_to_publish', 'aklh_publish', 999);
+add_action('future_to_publish', 'aklh_publish', 999);
+
 
 function aklh_post_delete($post_id) {
-	$post = get_post($post_id);
-	$post_types = aklh_public_post_types();
-	if (in_array($post->post_type, $post_types)) {
-		global $aklh;
-		$aklh->post_delete($post_id);
-	} 
-	else {
-		return;
-	}
+	global $aklh;
+	$aklh->post_delete($post_id);
 }
+add_action('delete_post', 'aklh_post_delete');
 
 //This prevents posts, that when updated, don't add data twice, but reset it
 function aklh_post_update($post) {
@@ -1256,11 +1348,13 @@ function aklh_post_update($post) {
 		return;
 	}
 }
+add_action('publish_to_publish', 'aklh_post_update', 999);
 
 function aklh_options_form() {
 	global $aklh;
 	$aklh->options_form();
 }
+add_action('admin_menu', 'aklh_options');
 
 function aklh_options() {
 	add_options_page(
@@ -1281,26 +1375,30 @@ function aklh_options() {
 }
 
 function aklh_admin_init() {
-	if (is_admin() && $_GET['page'] == basename(__FILE__)) {
-		CF_Admin::cf_load_js();
-		CF_Admin::cf_load_css();
+	if ($_GET['page'] == basename(__FILE__)) {
+		CF_Admin::load_js();
+		CF_Admin::load_css();
 		wp_enqueue_script('jquery');
 		wp_enqueue_script('aklh_js', esc_url(site_url('index.php?ak_action=lh_js')), 'jquery');
 		wp_enqueue_style('aklh_css', esc_url(site_url('index.php?ak_action=lh_css')));
 	}
 }
+add_action('admin_init', 'aklh_admin_init');
 
 function aklh_admin_show_harvest() {
 	global $aklh;
-	echo '<div class="wrap">';
-	CF_Admin::cf_admin_header(__('Link Harvest', 'link-harvest'), 'Link Harvest', AKLH_VERSION);
 	echo ('
-		<p>'.__('Set domains to exclude and how many links to display in this list on the <a href="'.esc_url(admin_url('options-general.php?page=link-harvest.php')).'">options page</a>.', 'link-harvest').'</p>
+<div id="cf" class="wrap">
+	<div id="cf-header">
+	');
+	CF_Admin::admin_header(__('Link Harvest', 'link-harvest'), 'Link Harvest', AKLH_VERSION, 'link-harvest');
+	echo '</div>';
+	echo ('
+		<p>'.__('Set domains to exclude and how many links to display in this list on the <a href="'.admin_url('options-general.php?page=link-harvest.php').'">options page</a>.', 'link-harvest').'</p>
 	');
 	$aklh->show_harvest(get_option('aklh_table_length'));
-	print('
-		</div>
-	');
+	echo '</div> <!--#cf-->';
+	CF_Admin::callouts('link-harvest');
 }
 
 function aklh_request_handler() {
@@ -1317,6 +1415,8 @@ function aklh_request_handler() {
 				}
 				$aklh = new ak_link_harvest;
 				$aklh->update_settings();
+				header('Location: '.admin_url('options-general.php?page=link-harvest.php&updated=true'));
+				die();
 				break;
 			case 'harvest_posts':
 				ini_set('display_errors', '0');
@@ -1337,7 +1437,7 @@ function aklh_request_handler() {
 					$limit = intval($_POST['limit']);
 				}
 				else {
-					$limit = $aklh->default_limit;;
+					$limit = $aklh->default_limit;
 				}
 				
 				if ($start == 0) {
@@ -1367,7 +1467,7 @@ function aklh_request_handler() {
 				");
 				$completed = ($start + $limit);
 				if ($completed >= $count) {
-				//	update_option('aklh_harvest_enabled', '0');
+					//update_option('aklh_harvest_enabled', '0');
 					$completed = $count;
 				}
 				
@@ -1389,14 +1489,15 @@ function aklh_request_handler() {
 				else {
 					$limit = 1;
 				}
-				$domains = $wpdb->get_results("
+				$domains = $wpdb->get_results( $wpdb->prepare("
 					SELECT *
 					FROM $wpdb->ak_domains
 					WHERE title = ''
-					AND id > $last
+					AND id > %d
 					ORDER BY id
-					LIMIT $limit
-				");
+					LIMIT %d",
+					$last, $limit
+				));
 				if (count($domains) > 0) {
 					foreach ($domains as $domain) {
 						$title = $aklh->get_page_title('http://'.$domain->domain);
@@ -1404,11 +1505,11 @@ function aklh_request_handler() {
 							$title = $aklh->get_page_title('http://www.'.$domain->domain);
 						}
 						if (!empty($title)) {
-							$result = $wpdb->query("
-								UPDATE $wpdb->ak_domains
-								SET title = '".mysql_real_escape_string($title)."'
-								WHERE id = '$domain->id'
-							");
+							$result = $wpdb->update(
+								$wpdb->ak_domains,
+								array('title' => $title),
+								array('id' => $domain->id)
+							);
 						}
 					}
 					$completed = $domain->id;
@@ -1432,14 +1533,15 @@ function aklh_request_handler() {
 				else {
 					$limit = 1;
 				}
-				$links = $wpdb->get_results("
+				$links = $wpdb->get_results( $wpdb->prepare("
 					SELECT *
 					FROM $wpdb->ak_linkharvest
 					WHERE title = ''
-					AND id > $last
+					AND id > %d
 					ORDER BY id
-					LIMIT $limit
-				");
+					LIMIT %d",
+					$last, $limit
+				));
 				if (count($links) > 0) {
 					foreach ($links as $link) {
 						$title = $aklh->get_page_title($link->url);
@@ -1477,102 +1579,52 @@ function aklh_request_handler() {
 				$aklk->get_settings();
 				$aklk->show_processing_page('backfill_pages');
 				break;
-			case 'show_links':
-				if (empty($_GET['domain_id'])) {
+
+			case 'list_links':
+				if (!$_GET['domain_id']) {
 					die();
 				}
-				$domain_id = intval($_GET['domain_id']);
-				$aklk = new ak_link_harvest;
-				$aklk->get_settings();
-				$links = $wpdb->get_results("
-					SELECT DISTINCT(url), title
-					FROM $wpdb->ak_linkharvest
-					WHERE domain_id = '$domain_id'
-					ORDER BY post_id DESC
-				");
-				echo('
-					<div>
-					<h4 class="aklh-h4">'.__('Links', 'link-harvest').' &nbsp - &nbsp <a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());">'.__('Close', 'link-harvest').'</a></h4></div>
-					<ul class="aklh-ul">
-				');
-				if (count($links) > 0) {
-					foreach ($links as $link) {
-						if (!empty($link->title)) {
-							$title = $link->title;
-						}
-						else {
-							$title = substr($link->url, 0, 60);
-						}
-						echo('
-							<li><a href="'.$link->url.'">'.$title.'</a></li>
-						');
-					}
-				}
 				else {
-					print('
-						<li>'.__('(none found)', 'link-harvest').'</li>
-					');
+					$domain_id = $_GET['domain_id'];
+					$links = $wpdb->get_results( $wpdb->prepare("
+						SELECT * 
+						FROM $wpdb->ak_linkharvest 
+						WHERE domain_id = %d",
+						$domain_id
+					));
+					if ($links === false) {
+						die();
+					}
+					$items = array();
+					foreach ($links as $link) {
+						$items[$link->url]['count'] = $aklh->get_num_links($link->url);
+						$items[$link->url]['url'] = $link->url;
+						$items[$link->url]['title'] = $link->title;
+					}
+					echo $aklh->get_list_nodes($items);
 				}
-				print('
-					</ul>
-				');
 				die();
 				break;
-			case 'show_posts':
-				if (empty($_GET['domain_id'])) {
+			case 'list_posts':
+				if (!$_GET['domain_id']) {
 					die();
 				}
-				$domain_id = intval($_GET['domain_id']);
-				$aklk = new ak_link_harvest;
-				$aklk->get_settings();
-				$posts = $wpdb->get_results("
-					SELECT p.*
-					FROM $wpdb->posts p
-					LEFT JOIN $wpdb->ak_linkharvest lh
-					ON p.ID = lh.post_id
-					WHERE lh.domain_id = '$domain_id'
-					AND (
-						post_status = 'publish'
-						OR post_status = 'static'
-					)
-					GROUP BY p.ID
-					ORDER BY p.post_date DESC
-				");
-				echo('
-					<div>
-					<h4 class="aklh-h4">'.__('Posts and Pages', 'link-harvest').' &nbsp - &nbsp <a href="javascript:void(jQuery(\'#domain_'.$domain_id.'\').slideUp());">'.__('Close', 'link-harvest').'</h4> </div>
-					<ul class="aklh-ul">
-				');
-				if (count($posts) > 0) {
-					global $post;
-					foreach ($posts as $post) {
-						get_the_title($post->ID) == '' ? $title = get_permalink($post->ID) : $title =get_the_title($post->ID);
-						echo('
-							<li><a href="'.get_permalink($post->ID).'">'.$title.'</a> ('.get_the_time('Y-m-d').')</li>
-						');
-					}
-				}
 				else {
-					print('
-						<li>'.__('(none found)', 'link-harvest').'</li>
-					');
+					$domain_id = $_GET['domain_id'];
+					echo $aklh->get_list_nodes_posts($domain_id);
 				}
-				print('
-					</ul>
-				');
 				die();
 				break;
 			case 'lh_css':
 				header("Content-type: text/css");
 ?>
-.aklh-h4 {
-	margin:0;
-	padding:10px 0 10px 0;
-	display:block;
-	font-size:13px
+table.aklh_harvest h4 {
+	margin: 0;
+	padding: 0;
+	display:inline-block;
 }
-.aklh-ul{
-	margin-left:10px;
+table.aklh_harvest ul{
+	margin-left: 10px;
 	padding-left: 10px;
 }
 table.aklh_harvest {
@@ -1594,9 +1646,9 @@ table.aklh_harvest td.action {
 	text-align: center;
 	width: 10%;
 }
-table.aklh_harvest td a.close {
-	display: block;
-	float:right;
+table.aklh_harvest a.close {
+	display: inline;
+	float: right;
 }
 #aklh_template_tags dl {
 	margin-left: 10px;
@@ -1620,18 +1672,26 @@ table.aklh_harvest td a.close {
 				header("Content-type: text/javascript");
 ?>
 function aklh_show_for_domain(domain_id, type) {
+	echo_type = '<?php _e('Links', 'link-harvest') ?>';
 	switch (type) {
 		case 'posts':
+			echo_type = '<?php _e('Posts', 'link-harvest') ?>';
 		case 'links':
 			var pars = {
-				"ak_action": "show_" + type,
+				"ak_action": "list_" + type,
 				"domain_id": domain_id
 			};
 	}
-	var target = jQuery('#domain_' + domain_id);
-	jQuery.get("<?php bloginfo('wpurl'); ?>/index.php", pars, function(data) {
-		target.hide().html(data).slideDown();
-	});
+	var header_html = '<a href="javascript:void(jQuery(\'.aklh-' + type + '-list-' + domain_id +'\').slideUp());" class="close">' + '<?php _e('Close', 'link-harvest'); ?>'+'</a> <h4 class="aklh-h4">' + echo_type + '</h4>';
+	var target = jQuery('.aklh-'+type+'-list-' + domain_id);
+	if (target.html() == '') {
+		jQuery.get("<?php bloginfo('wpurl'); ?>/index.php", pars, function(data) {
+			target.hide().html(header_html + '<ul class="aklh_ul">'+data+'</ul>').slideToggle();
+		});
+	}
+	else {
+		target.slideToggle();
+	}
 }
 <?php
 			die();
@@ -1677,21 +1737,28 @@ function aklh_get_harvest($count = 50, $type = 'table') {
 	return $output;
 }
 
+function aklh_powered_by_link() {
+	echo ('
+		<p id="aklh_credit">'.__('Powered by ', 'link-harvest').'<a href="http://crowdfavorite.com/wordpress/plugins/link-harvest/">Link Harvest</a>.</p>
+	');
+}
+
 // -- TEMPLATE FUNCTIONS
 
 function aklh_show_harvest($count = 50, $type = 'table') {
 	global $aklh;
 	$aklh->show_harvest($count, $type);
-	print('
-		<p id="aklh_credit">'.__('Powered by ', 'link-harvest').'<a href="http://crowdfavorite.com/wordpress/plugins/link-harvest/">Link Harvest</a>.</p>
-	');
+	if (get_option('aklh_credit')) {
+		aklh_powered_by_link();
+	}
 }
+//Deprecated, just use aklh_show_harvest
 function aklh_top_links($count = 10, $type = 'list') {
 	global $aklh;
 	$aklh->show_harvest($count, $type);
-	print('
-		<p id="aklh_credit">'.__('Powered by ', 'link-harvest').'<a href="http://crowdfavorite.com/wordpress/plugins/link-harvest/">Link Harvest</a>.</p>
-	');
+	if (get_option('aklh_credit')) {
+		aklh_powered_by_link();
+	}
 }
 
 // debug logging
@@ -1709,35 +1776,24 @@ function aklh_log($msg) {
 	}
 }
 
-// -- GET HOOKED
-
-add_action('init', 'aklh_init');
-
-add_action('admin_menu', 'aklh_options');
-add_action('admin_init', 'aklh_admin_init');
-
-add_action('new_to_publish', 'aklh_publish', 999);
-add_action('draft_to_publish', 'aklh_publish', 999);
-add_action('pending_to_publish', 'aklh_publish', 999);
-add_action('future_to_publish', 'aklh_publish', 999);
-add_action('delete_post', 'aklh_post_delete');
-
-add_action('publish_to_publish', 'aklh_post_update', 999);
-
 //Multisite
-// Multisite support/utility functions
-function aklh_is_multisite_and_network_activation() {
-	return CF_Admin::cf_is_multisite_and_network_activation();
+
+function aklh_is_multisite() {
+	return CF_Admin::is_multisite();
+}
+
+function aklh_is_network_activation() {
+	return CF_Admin::is_network_activation();
 }
 
 function aklh_activate_for_network() {
-	CF_Admin::cf_activate_for_network('aklh_activate_single');
+	CF_Admin::activate_for_network('aklh_activate_single');
 }
 
-function aklh_new_blog($blog_id) {
-	CF_Admin::cf_new_blog(AKLH_FILE, $blog_id, 'aklh_activate_single');
+function aklh_activate_plugin_for_new_blog($blog_id) {
+	CF_Admin::activate_plugin_for_new_blog(AKLH_FILE, $blog_id, 'aklh_activate_single');
 }
-add_action('wpmu_new_blog', 'aklh_new_blog');
+add_action('wpmu_new_blog', 'aklh_activate_plugin_for_new_blog');
 
 function aklh_switch_blog() {
 	global $wpdb;
