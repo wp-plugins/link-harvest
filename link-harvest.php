@@ -1158,7 +1158,7 @@ function aklh_options() {
 		add_options_page(
 			__('Link Harvest Options', 'link-harvest')
 			, __('Link Harvest', 'link-harvest')
-			, 10
+			, 'manage_options'
 			, basename(__FILE__)
 			, 'aklh_options_form'
 		);
@@ -1168,7 +1168,7 @@ function aklh_options() {
 			'index.php'
 			, __('Link Harvest', 'link-harvest')
 			, __('Link Harvest', 'link-harvest')
-			, 0
+			, 'manage_options'
 			, basename(__FILE__)
 			, 'aklh_admin_show_harvest'
 		);
