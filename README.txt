@@ -12,11 +12,11 @@ Link Harvest will go through all of your posts and compile a list of all externa
 
 Links:
 
-* [Link Harvest in Actions](http://alexking.org/links).
-* [Wordpress.org Link Harvest forum topics](http://wordpress.org/tags/link-harvest?forum_id=10).
-* [Link Harvest plugin page at Crowd Favorite](http://crowdfavorite.com/wordpress/plugins/link-harvest/).
-* [Plugin forums at Crowd Favorite](http://crowdfavorite.com/forums/forum/link-harvest).
-* [Link Harvest support](http://wphelpcenter.com/plugins/link-harvest/).
+- [Link Harvest in Actions](http://alexking.org/links).
+- [Wordpress.org Link Harvest forum topics](http://wordpress.org/tags/link-harvest?forum_id=10).
+- [Link Harvest plugin page at Crowd Favorite](http://crowdfavorite.com/wordpress/plugins/link-harvest/).
+- [Plugin forums at Crowd Favorite](http://crowdfavorite.com/forums/forum/link-harvest).
+- [WordPress Help Center Link Harvest support](http://wphelpcenter.com/plugins/link-harvest/).
 
 Link Harvest will go through all of your posts and pages and compile a list of all external links. It will then create a live updating linkroll for you, based on your actual linking activity. The more you link to a particular site, the higher it will appear on the list, which can be shown in a full page display or within your sidebar. The plugin also includes tool to view the individual links to each site and the pages on which the links appear.
 
@@ -26,8 +26,8 @@ If you wish to display the link list on your site, you can use shortcodes or tem
 
 Template tags: 
 	
-* `<?php if (function_exists('aklh_show_harvest')) {aklh_show_harvest($limit = 50, $type = "table" or "list")} ?>`
-* `<?php if (function_exists('aklh_top_links')) {aklh_top_links($limit = 10, $type = "list" or "table")} ?>`
+- `<?php if (function_exists('aklh_show_harvest')) {aklh_show_harvest($limit = 50, $type = "table" or "list")} ?>`
+- `<?php if (function_exists('aklh_top_links')) {aklh_top_links($limit = 10, $type = "list" or "table")} ?>`
 
 Shortcode: `[linkharvest type="list or table" limit="50"]`
 
@@ -76,33 +76,32 @@ That about does it - enjoy!
 == Changelog ==
 
 = 1.3 =
-* New : Ability to show/hide number of times links or domains have been used.
-* New : Integrated CF-Admin class for options display
-* New : List type Linkroll now displays show/hide links and posts for each domain
-* New : `[linkharvest]` shortcode
-* New : Option to turn off powered by link
-* New : Support for custom post types
-* Changed : Show Posts/Show Pages Javascript, now toggles display on link click as well
-* Changed : Admin table formatting using WordPress core CSS
-* Changed : Deprecated token method
-* Changed : Domain exclusion list excludes on display as opposed to on harvest
-* Bugfix : Added various escaping and data validation
-* Bugfix : Updating a post re-added the links of that post to the domain counter and database
+- New : Ability to show/hide number of times links or domains have been used.
+- New : Integrated CF_Admin class for options display
+- New : List type Linkroll now displays show/hide links and posts for each domain
+- New : `[linkharvest]` shortcode
+- New : Option to turn off powered by link
+- New : Support for custom post types
+- Changed : Show Posts/Show Pages Javascript, now toggles display on link click as well
+- Changed : Admin table formatting using WordPress core CSS
+- Changed : Deprecated token method
+- Changed : Domain exclusion list excludes on display as opposed to on harvest
+- Bugfix : Added various escaping and data validation
+- Bugfix : Updating a post re-added the links of that post to the domain counter and database
 
 = 1.2 =
-* New : AKLH_LOADED check.
-* New : Added install function.
-* Changed : Removed old code that relied on the Prototype Library.
+- New : AKLH_LOADED check.
+- New : Added install function.
+- Changed : Removed old code that relied on the Prototype Library.
 
 = 1.1 =
-* New : Debug code and logging functionality
-* New : Exclude file extensions functionality.
-* Changed : Translation text domain to match plugin-slug
-* Changed : Table prefix codes.
+- New : Debug code and logging functionality
+- New : Exclude file extensions functionality.
+- Changed : Translation text domain to match plugin-slug
+- Changed : Table prefix codes.
 
 = 1.0 =
-* New : The first version.
-
+- New : The first version.
 
 == Harvesting Your Links ==
 
@@ -130,7 +129,7 @@ To show a list or table of your harvested links in a post (or page), use the fol
 
 You can always add a template tag to your theme (in a page template perhaps) to show your links list:
 
-`<?php if (function_exists('aklh_show_harvest')) { aklh_show_harvest($count = 50); } ?>`
+`<?php if (function_exists('aklh_show_harvest')) { aklh_show_harvest(50); } ?>`
 
 == Adding a links list/blogroll to your sidebar ==
 

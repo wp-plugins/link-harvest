@@ -78,6 +78,10 @@ function aklh_activate_single() {
 	}
 }
 
+function aklh_activate_for_network() {
+	CF_Admin::activate_for_network('aklh_activate_single');
+}
+
 function aklh_init() {
 	global $aklh, $wpdb;
 	$wpdb->ak_domains = $wpdb->prefix.'ak_domains';
@@ -87,8 +91,8 @@ function aklh_init() {
 	$aklh->get_settings();
 	if (!is_admin()) {
 		wp_enqueue_script('jquery');
-		wp_enqueue_script('aklh_js', esc_url(site_url('index.php?ak_action=lh_js')), array('jquery'));
-		wp_enqueue_style('aklh_css', esc_url(site_url('index.php?ak_action=lh_css')));
+		wp_enqueue_script('aklh_js', site_url('index.php?ak_action=lh_js'), array('jquery'));
+		wp_enqueue_style('aklh_css', site_url('index.php?ak_action=lh_css'));
 	}
 }
 add_action('init', 'aklh_init');
@@ -203,10 +207,17 @@ class ak_link_harvest {
 			TRUNCATE TABLE $wpdb->ak_linkharvest
 		");
 	}
-	
+
 	function get_settings() {
+		$settings = unserialize(get_option('aklh_options'));
 		foreach ($this->options as $option => $type) {
-			$this->$option = get_option('aklh_'.$option);
+			if (!empty($settings)) {
+				$this->$option = $settings['aklh_'.$option];
+			}
+			else {
+				//backwards compat until user updates settings again
+				$this->$option = get_option('aklh_'.$option);
+			}
 			switch ($type) {
 				case 'explode':
 					$this->$option = explode(' ', $this->$option);
@@ -220,6 +231,7 @@ class ak_link_harvest {
 	
 	function update_settings() {
 		$this->install();
+		$options_arr = array();
 		foreach ($this->options as $option => $type) {
 			if (isset($_POST[$option])) {
 				switch ($type) {
@@ -232,9 +244,11 @@ class ak_link_harvest {
 					default:
 						$value = stripslashes($_POST[$option]);
 				}
-				update_option('aklh_'.$option, $value);
+				$options_arr['aklh_'.$option] = $value;
+				//update_option('aklh_'.$option, $value);
 			}
 		}
+		update_option('aklh_options', serialize($options_arr));
 	}
 	
 	function excluded_file_type($link) {
@@ -814,7 +828,7 @@ class ak_link_harvest {
 		$output = '';
 		foreach ($items as $item) {
 			$count_markup ='';
-			if (get_option('aklh_show_num_links')) {
+			if ($this->show_num_links) {
 				$count_markup = '('.esc_html($item['count']).') ';
 			}
 			$output .= '<li>'.$count_markup.'<a href="'.esc_url($item['url']).'"'.$data.'>'.esc_html($item['title']).'</a></li>'."\n";
@@ -936,7 +950,7 @@ class ak_link_harvest {
 				</div>
 				<input type="hidden" name="ak_action" value="update_linkharvest_settings" />
 			</fieldset>'
-			.wp_nonce_field('link-harvest' , 'link-harvest-settings-nonce', true, false).wp_referer_field(false).
+			.wp_nonce_field('link-harvest' , 'link-harvest_settings_nonce', true, false).wp_referer_field(false).
 			'<p class="submit">
 				<input class="button-primary" type="submit" name="submit" value="'.__('Save Changes', 'link-harvest').'" />
 			</p>
@@ -1396,7 +1410,7 @@ function aklh_admin_show_harvest() {
 	echo ('
 		<p>'.__('Set domains to exclude and how many links to display in this list on the <a href="'.admin_url('options-general.php?page=link-harvest.php').'">options page</a>.', 'link-harvest').'</p>
 	');
-	$aklh->show_harvest(get_option('aklh_table_length'));
+	$aklh->show_harvest($aklh->table_length);
 	echo '</div> <!--#cf-->';
 	CF_Admin::callouts('link-harvest');
 }
@@ -1410,7 +1424,7 @@ function aklh_request_handler() {
 
 		switch($_POST['ak_action']) {
 			case 'update_linkharvest_settings': 
-				if (!check_admin_referer('link-harvest', 'link-harvest-settings-nonce')) {
+				if (!check_admin_referer('link-harvest', 'link-harvest_settings_nonce')) {
 					die();
 				}
 				$aklh = new ak_link_harvest;
@@ -1712,20 +1726,21 @@ function aklh_shortcode($atts) {
 add_shortcode('linkharvest', 'aklh_shortcode');
 
 //Deprecated
+global $aklh;
 function aklh_the_content($content) {
 	if (strstr($content, '###linkharvest###')) {
 		$content = str_replace('###linkharvest###', aklh_get_harvest(), $content);
 	}
 	return $content;
 }
-if (get_option('aklh_token')) {
+if ($aklh->token) {
 	add_action('the_content', 'aklh_the_content');
 }
 
 function aklh_the_excerpt($content) {
 	return str_replace('###linkharvest###', '', $content);;
 }
-if (get_option('aklh_token')) {
+if ($aklh->token) {
 	add_action('the_excerpt', 'aklh_the_excerpt');
 }
 
@@ -1748,7 +1763,7 @@ function aklh_powered_by_link() {
 function aklh_show_harvest($count = 50, $type = 'table') {
 	global $aklh;
 	$aklh->show_harvest($count, $type);
-	if (get_option('aklh_credit')) {
+	if ($aklh->credit) {
 		aklh_powered_by_link();
 	}
 }
@@ -1756,7 +1771,7 @@ function aklh_show_harvest($count = 50, $type = 'table') {
 function aklh_top_links($count = 10, $type = 'list') {
 	global $aklh;
 	$aklh->show_harvest($count, $type);
-	if (get_option('aklh_credit')) {
+	if ($aklh->credit) {
 		aklh_powered_by_link();
 	}
 }
@@ -1784,10 +1799,6 @@ function aklh_is_multisite() {
 
 function aklh_is_network_activation() {
 	return CF_Admin::is_network_activation();
-}
-
-function aklh_activate_for_network() {
-	CF_Admin::activate_for_network('aklh_activate_single');
 }
 
 function aklh_activate_plugin_for_new_blog($blog_id) {
